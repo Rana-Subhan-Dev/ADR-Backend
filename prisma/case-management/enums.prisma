@@ -1,0 +1,304 @@
+// Enums shared across the case-management domain.
+
+enum InquiryStatus {
+  INQUIRY
+  CONVERTED
+  ARCHIVED
+}
+
+enum CaseLifecycleStatus {
+  INTAKE
+  SCHEDULED
+  ACTIVE
+  ON_HOLD
+  CLOSED
+  REOPENED
+}
+
+enum CaseType {
+  MEDIATION
+  ARBITRATION
+  HYBRID_ADR
+  CUSTOM_ADR
+}
+
+// Placeholder — value set not confirmed by either source; see doc §7.
+enum FeeScheduleStatus {
+  NOT_SET
+  PENDING
+  CONFIRMED
+}
+
+enum ConflictCheckStatus {
+  PENDING
+  CLEARED
+  FLAGGED
+}
+
+enum RevenueMilestoneStatus {
+  ESTIMATED
+  INVOICED
+  RECEIVED
+}
+
+enum PartyType {
+  INDIVIDUAL
+  ORGANIZATION
+}
+
+enum PartySide {
+  CLAIMANT
+  RESPONDENT
+}
+
+enum RepresentationDesignation {
+  LEAD_COUNSEL
+  CO_COUNSEL
+}
+
+enum CaseParticipantRole {
+  CASE_MANAGER
+  NEUTRAL
+  LAWYER
+  CLIENT
+  ACCOUNTING_STAFF
+}
+
+enum CaseParticipantAccessStatus {
+  ACTIVE
+  REVOKED
+  INACTIVE
+}
+
+enum CaseParticipantInvitationStatus {
+  NOT_INVITED
+  INVITED
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+enum ParticipantLinkType {
+  ASSIGNED
+  ATTACHED
+}
+
+enum HearingType {
+  MEDIATION_SESSION
+  ARBITRATION_HEARING
+  STATUS_CONFERENCE
+  CUSTOM
+}
+
+enum HearingFormat {
+  VIRTUAL
+  IN_PERSON
+  HYBRID
+}
+
+enum HearingStatus {
+  PENDING
+  HOLD_REQUESTED
+  CONFIRMED
+  RESCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
+enum CalendarSyncStatus {
+  SYNCED
+  PENDING
+  FAILED
+  NOT_SYNCED
+}
+
+enum ZoomStatus {
+  GENERATED
+  PENDING
+  FAILED
+  MANUALLY_LINKED
+}
+
+enum ConflictStatus {
+  CLEAR
+  NEEDS_REVIEW
+  CONFLICT
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  UNKNOWN
+}
+
+// Placeholder — value set not confirmed by either source; see doc §7.
+enum ConferenceCallStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
+enum DocumentSubmissionStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+  OVERDUE
+}
+
+enum DocumentVisibility {
+  INTERNAL_ONLY
+  NEUTRAL_ONLY
+  ALL_AUTHORIZED_PARTICIPANTS
+  SPECIFIC_PARTY_LAWYER_CLIENT
+  ACCOUNTING_FINANCE
+}
+
+enum DocumentReviewStatus {
+  PENDING_REVIEW
+  REVIEWED
+}
+
+enum DocumentProcessingStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum DocumentAccessAction {
+  VIEWED
+  DOWNLOADED
+}
+
+enum CaseNoteType {
+  INTERNAL_NOTE
+  CASE_UPDATE
+  EXTERNAL_COMMENT
+}
+
+enum CaseNoteVisibility {
+  INTERNAL_ONLY
+  ALL_PARTICIPANTS
+  SPECIFIC_PARTICIPANTS
+}
+
+enum CaseTimelineEventType {
+  CASE_CREATED
+  STATUS_CHANGED
+  PARTY_ADDED
+  ATTORNEY_ADDED
+  NEUTRAL_ASSIGNED
+  PARTICIPANT_INVITED
+  PARTICIPANT_ACCESS_ACCEPTED
+  HEARING_SCHEDULED
+  ZOOM_LINK_GENERATED
+  CALENDAR_INVITE_SENT
+  DOCUMENT_UPLOADED
+  DOCUMENT_VISIBILITY_CHANGED
+  INVOICE_ISSUED
+  PAYMENT_RECEIVED
+  DOCUSIGN_SENT
+  DOCUSIGN_COMPLETED
+  CHECKLIST_ITEM_COMPLETED
+  CASE_CLOSED
+  CASE_REOPENED
+}
+
+enum ChecklistCategory {
+  READINESS
+  CLOSURE
+}
+
+enum ChecklistStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETE
+  NOT_APPLICABLE
+}
+
+enum ChecklistItemType {
+  SYSTEM_DERIVED
+  MANUAL
+}
+
+enum TimesheetActivityType {
+  PRE_HEARING_PREPARATION
+  REVIEW_OF_DOCUMENTS
+  HEARING_TIME
+  POST_HEARING_FOLLOW_UP
+  CASE_MANAGEMENT
+}
+
+enum TimesheetStatus {
+  DRAFT
+  SUBMITTED
+}
+
+enum TimesheetApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum BillingType {
+  HOURLY
+  FLAT
+  HYBRID
+}
+
+enum InvoiceType {
+  DEPOSIT
+  STANDARD
+  ADMINISTRATIVE
+  FINAL
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  SENT
+  OVERDUE
+  VOID
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
+enum DocuSignEnvelopeStatus {
+  PENDING
+  SENT
+  COMPLETED
+  DECLINED
+  FAILED
+  EXPIRED
+}
+
+enum DocuSignRecipientStatus {
+  SENT
+  COMPLETED
+  DECLINED
+}
+
+enum IntegrationType {
+  CALENDAR
+  ZOOM
+  DOCUSIGN
+  QUICKBOOKS
+  SMS
+  EMAIL
+}
+
+enum IntegrationSyncStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  RETRYING
+}
+
+enum MigrationRecordStatus {
+  SUCCESS
+  WARNING
+  ERROR
+}

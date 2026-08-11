@@ -1,0 +1,97 @@
+model Case {
+  id String @id @default(uuid())
+
+  caseNumber String @unique
+
+  inquiryId String?  @unique
+  inquiry   Inquiry? @relation(fields: [inquiryId], references: [id], onDelete: SetNull)
+
+  title    String
+  caseType CaseType
+
+  disputeCategoryId String?
+  disputeCategory   DisputeCategory? @relation(fields: [disputeCategoryId], references: [id], onDelete: SetNull)
+
+  lifecycleStatus CaseLifecycleStatus @default(INTAKE)
+
+  stageId String?
+  stage   CaseStage? @relation(fields: [stageId], references: [id], onDelete: SetNull)
+
+  caseValue           Decimal?            @db.Decimal(14, 2)
+  feeScheduleStatus   FeeScheduleStatus?
+  conflictCheckStatus ConflictCheckStatus @default(PENDING)
+  isInternational     Boolean             @default(false)
+
+  lastContactDate DateTime?
+  followUpDate    DateTime?
+  nextStep        String?
+
+  jurisdiction   String?
+  closureSummary String? @db.Text
+  reopenReason   String?
+
+  legacyCaseNumber  String?
+  legacyReferenceId String?
+  isMigrated        Boolean         @default(false)
+  migrationBatchId  String?
+  migrationBatch    MigrationBatch? @relation(fields: [migrationBatchId], references: [id], onDelete: SetNull)
+
+  // ----------------------------------------------------------
+  // Relations
+  // ----------------------------------------------------------
+  revenueMilestones    CaseRevenueMilestone[]
+  parties              CaseParty[]
+  participants         CaseParticipant[]
+  hearings             Hearing[]
+  conferenceCalls      CaseConferenceCall[]
+  documentSubmissions  DocumentSubmissionRequest[]
+  documents            Document[]
+  notes                CaseNote[]
+  timelineEvents       CaseTimelineEvent[]
+  checklistItems       ChecklistItem[]
+  neutralTimesheets    NeutralTimesheet[]
+  billingConfiguration BillingConfiguration?
+  invoices             Invoice[]
+  docuSignEnvelopes    DocuSignEnvelope[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([lifecycleStatus])
+  @@index([stageId])
+  @@index([disputeCategoryId])
+  @@map("cases")
+}
+
+model CaseStage {
+  id String @id @default(uuid())
+
+  name      String  @unique
+  sortOrder Int     @default(0)
+  isActive  Boolean @default(true)
+
+  cases Case[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@map("case_stages")
+}
+
+model CaseRevenueMilestone {
+  id String @id @default(uuid())
+
+  caseId String
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  sequence        Int
+  estimatedAmount Decimal                @db.Decimal(12, 2)
+  revenueDate     DateTime?
+  status          RevenueMilestoneStatus @default(ESTIMATED)
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@unique([caseId, sequence])
+  @@map("case_revenue_milestones")
+}

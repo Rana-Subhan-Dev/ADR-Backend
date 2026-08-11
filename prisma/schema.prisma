@@ -1,0 +1,16 @@
+// Root Prisma schema file — generator and datasource blocks only.
+//
+// All models/enums live in the multi-file schema under this same `prisma/`
+// directory, split by domain (user-access / case-management).
+// Relations resolve automatically across files — no imports needed.
+// See package.json's "prisma.schema" field, which points the CLI at this
+// directory so it picks up every *.prisma file underneath it.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}

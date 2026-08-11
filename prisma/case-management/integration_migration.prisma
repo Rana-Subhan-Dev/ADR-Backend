@@ -1,0 +1,66 @@
+model IntegrationSyncLog {
+  id String @id @default(uuid())
+
+  integrationType   IntegrationType
+  relatedRecordType String
+  relatedRecordId   String
+
+  status        IntegrationSyncStatus
+  errorMessage  String?
+  attemptCount  Int                   @default(1)
+  lastAttemptAt DateTime
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([relatedRecordType, relatedRecordId])
+  @@index([integrationType, status])
+  @@map("integration_sync_logs")
+}
+
+model MigrationBatch {
+  id String @id @default(uuid())
+
+  sourceFileName String
+
+  importedByUserId String
+  importedBy       User   @relation(fields: [importedByUserId], references: [id], onDelete: Restrict)
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  totalRecords Int @default(0)
+  successCount Int @default(0)
+  warningCount Int @default(0)
+  errorCount   Int @default(0)
+
+  recordLogs MigrationRecordLog[]
+
+  // Migrated entities carrying a `migrationBatchId` FK back to this batch.
+  cases       Case[]
+  caseParties CaseParty[]
+  attorneys   Attorney[]
+  documents   Document[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+
+  @@map("migration_batches")
+}
+
+model MigrationRecordLog {
+  id String @id @default(uuid())
+
+  migrationBatchId String
+  migrationBatch   MigrationBatch @relation(fields: [migrationBatchId], references: [id], onDelete: Cascade)
+
+  recordType          String
+  sourceRowIdentifier String?
+  createdRecordId     String?
+
+  status  MigrationRecordStatus
+  message String?               @db.Text
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([migrationBatchId, status])
+  @@map("migration_record_logs")
+}

@@ -1,0 +1,38 @@
+model NeutralProfile {
+  id String @id @default(uuid())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  neutralType       NeutralType
+  specialties       String[]
+  defaultHourlyRate Decimal?    @db.Decimal(12, 2)
+  bio               String?     @db.Text
+  credentials       String?
+  yearsOfExperience Int?
+
+  supportContacts NeutralSupportContact[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@map("neutral_profiles")
+}
+
+model NeutralSupportContact {
+  id String @id @default(uuid())
+
+  neutralProfileId String
+  neutralProfile   NeutralProfile @relation(fields: [neutralProfileId], references: [id], onDelete: Cascade)
+
+  name  String
+  title String?
+  email String?
+  phone String?
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([neutralProfileId])
+  @@map("neutral_support_contacts")
+}

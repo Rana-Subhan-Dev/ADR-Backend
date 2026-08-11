@@ -1,0 +1,61 @@
+model NeutralTimesheet {
+  id String @id @default(uuid())
+
+  caseId String
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  hearingId String?
+  hearing   Hearing? @relation(fields: [hearingId], references: [id], onDelete: SetNull)
+
+  neutralUserId String
+  neutral       User   @relation("NeutralTimesheetNeutral", fields: [neutralUserId], references: [id], onDelete: Restrict)
+
+  activityType TimesheetActivityType
+  hours        Decimal               @db.Decimal(6, 2)
+  entryDate    DateTime
+
+  status           TimesheetStatus         @default(DRAFT)
+  approvalStatus   TimesheetApprovalStatus @default(PENDING)
+  rejectionComment String?
+
+  approvedByUserId String?
+  approvedBy       User?   @relation("NeutralTimesheetApprover", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+
+  lineItems InvoiceLineItem[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([caseId, status])
+  @@index([neutralUserId, approvalStatus])
+  @@map("neutral_timesheets")
+}
+
+model BillingConfiguration {
+  id String @id @default(uuid())
+
+  caseId String @unique
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  billingType BillingType
+
+  neutralHourlyRate        Decimal? @db.Decimal(10, 2)
+  caseManagementHourlyRate Decimal? @db.Decimal(10, 2)
+  flatFeeAmount            Decimal? @db.Decimal(12, 2)
+
+  claimantSplitPercentage   Decimal? @db.Decimal(5, 2)
+  respondentSplitPercentage Decimal? @db.Decimal(5, 2)
+
+  taxApplicability     Boolean @default(false)
+  deliveryContactEmail String?
+  billingNotes         String? @db.Text
+
+  setupFee          Decimal? @db.Decimal(12, 2)
+  administrationFee Decimal? @db.Decimal(12, 2)
+  hasTrustAccount   Boolean  @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@map("billing_configurations")
+}

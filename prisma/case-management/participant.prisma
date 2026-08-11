@@ -1,0 +1,39 @@
+// The core access join table linking a platform User to a Case.
+
+model CaseParticipant {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  caseId String
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  role      CaseParticipantRole
+  isPrimary Boolean             @default(false)
+
+  attorneyId String?
+  attorney   Attorney? @relation(fields: [attorneyId], references: [id], onDelete: SetNull)
+
+  casePartyId String?
+  caseParty   CaseParty? @relation(fields: [casePartyId], references: [id], onDelete: SetNull)
+
+  accessStatus     CaseParticipantAccessStatus     @default(ACTIVE)
+  invitationStatus CaseParticipantInvitationStatus @default(NOT_INVITED)
+  lastInviteSentAt DateTime?
+
+  assignmentType   ParticipantLinkType
+  assignmentReason String?
+  revokeReason     String?
+
+  hearingAttendances   HearingAttendee[]
+  documentAccessGrants DocumentAccessGrant[]
+  docuSignRecipients   DocuSignRecipient[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([caseId, role, accessStatus])
+  @@index([userId, caseId])
+  @@map("case_participants")
+}

@@ -1,0 +1,84 @@
+model Hearing {
+  id String @id @default(uuid())
+
+  hearingReference String @unique
+
+  caseId String
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  type  HearingType
+  title String
+
+  format HearingFormat
+
+  holdingDate   DateTime?
+  dateConfirmed DateTime?
+  hearingDate   DateTime?
+  startTime     DateTime?
+  endTime       DateTime?
+
+  location      String?
+  hearingStatus HearingStatus @default(PENDING)
+
+  calendarProvider   CalendarProvider?
+  calendarEventId    String?
+  calendarSyncStatus CalendarSyncStatus?
+
+  zoomMeetingId String?
+  zoomJoinUrl   String?
+  zoomStatus    ZoomStatus?
+
+  conflictStatus         ConflictStatus @default(CLEAR)
+  conflictOverrideReason String?
+  rescheduleReason       String?
+  cancelReason           String?
+
+  attendees         HearingAttendee[]
+  neutralTimesheets NeutralTimesheet[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([caseId, hearingDate])
+  @@index([hearingDate])
+  @@map("hearings")
+}
+
+model HearingAttendee {
+  id String @id @default(uuid())
+
+  hearingId String
+  hearing   Hearing @relation(fields: [hearingId], references: [id], onDelete: Cascade)
+
+  caseParticipantId String
+  caseParticipant   CaseParticipant @relation(fields: [caseParticipantId], references: [id], onDelete: Cascade)
+
+  side             PartySide?
+  attendanceStatus AttendanceStatus?
+  notes            String?
+
+  @@unique([hearingId, caseParticipantId])
+  @@map("hearing_attendees")
+}
+
+model CaseConferenceCall {
+  id String @id @default(uuid())
+
+  caseId String?
+  case   Case?   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  inquiryId String?
+  inquiry   Inquiry? @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+
+  status ConferenceCallStatus @default(SCHEDULED)
+  date   DateTime?
+  time   String?
+  notes  String?              @db.Text
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([caseId])
+  @@index([inquiryId])
+  @@map("case_conference_calls")
+}

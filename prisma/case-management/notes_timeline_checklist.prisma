@@ -1,0 +1,67 @@
+model CaseNote {
+  id String @id @default(uuid())
+
+  caseId String
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  authorUserId String
+  author       User   @relation(fields: [authorUserId], references: [id], onDelete: Restrict)
+
+  noteType   CaseNoteType
+  visibility CaseNoteVisibility @default(INTERNAL_ONLY)
+  body       String             @db.Text
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([caseId, createdAt])
+  @@map("case_notes")
+}
+
+model CaseTimelineEvent {
+  id String @id @default(uuid())
+
+  caseId String
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  eventType CaseTimelineEventType
+
+  relatedRecordType String?
+  relatedRecordId   String?
+  previousValue     String?
+  newValue          String?
+  summary           String
+
+  actorUserId String?
+  actor       User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  timestamp DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([caseId, timestamp])
+  @@index([caseId, eventType])
+  @@index([actorUserId])
+  @@map("case_timeline_events")
+}
+
+model ChecklistItem {
+  id String @id @default(uuid())
+
+  caseId String
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  category      ChecklistCategory
+  label         String
+  status        ChecklistStatus   @default(PENDING)
+  type          ChecklistItemType
+  relatedModule String?
+
+  completedAt       DateTime?
+  completedByUserId String?
+  completedBy       User?     @relation(fields: [completedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([caseId, category, status])
+  @@map("checklist_items")
+}

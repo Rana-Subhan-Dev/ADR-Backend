@@ -1,0 +1,84 @@
+model Invoice {
+  id String @id @default(uuid())
+
+  caseId String
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  invoiceNumber String        @unique
+  invoiceType   InvoiceType
+  invoiceStatus InvoiceStatus @default(DRAFT)
+  paymentStatus PaymentStatus @default(UNPAID)
+
+  payerCasePartyId String?
+  payerCaseParty   CaseParty? @relation(fields: [payerCasePartyId], references: [id], onDelete: SetNull)
+
+  amountDue Decimal   @db.Decimal(12, 2)
+  dueDate   DateTime?
+
+  specialInstructions String? @db.Text
+
+  quickBooksInvoiceId    String?
+  quickBooksSyncStatus   IntegrationSyncStatus?
+  quickBooksLastSyncedAt DateTime?
+
+  lineItems   InvoiceLineItem[]
+  payments    Payment[]
+  creditNotes CreditNote[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([caseId, invoiceStatus, paymentStatus])
+  @@map("invoices")
+}
+
+model InvoiceLineItem {
+  id String @id @default(uuid())
+
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  description String
+  quantity    Decimal @default(1) @db.Decimal(8, 2)
+  unitPrice   Decimal @db.Decimal(12, 2)
+  amount      Decimal @db.Decimal(12, 2)
+
+  relatedTimesheetId String?
+  relatedTimesheet   NeutralTimesheet? @relation(fields: [relatedTimesheetId], references: [id], onDelete: SetNull)
+
+  @@map("invoice_line_items")
+}
+
+model Payment {
+  id String @id @default(uuid())
+
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  amount      Decimal  @db.Decimal(12, 2)
+  paymentDate DateTime
+  method      String?
+
+  quickBooksPaymentId String?
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([invoiceId])
+  @@map("payments")
+}
+
+model CreditNote {
+  id String @id @default(uuid())
+
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  amount   Decimal  @db.Decimal(12, 2)
+  reason   String?
+  issuedAt DateTime
+
+  quickBooksCreditNoteId String?
+
+  @@index([invoiceId])
+  @@map("credit_notes")
+}

@@ -1,0 +1,30 @@
+model LegalDocumentVersion {
+  id String @id @default(uuid())
+
+  documentType  LegalDocumentType
+  versionLabel  String
+  contentUrl    String
+  effectiveDate DateTime
+
+  acknowledgements LegalAcknowledgement[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+
+  @@map("legal_document_versions")
+}
+
+model LegalAcknowledgement {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  legalDocumentVersionId String
+  legalDocumentVersion   LegalDocumentVersion @relation(fields: [legalDocumentVersionId], references: [id], onDelete: Cascade)
+
+  acceptedAt DateTime @db.Timestamp(3)
+  ipAddress  String?
+
+  @@unique([userId, legalDocumentVersionId])
+  @@map("legal_acknowledgements")
+}

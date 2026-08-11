@@ -1,0 +1,24 @@
+model Notification {
+  id String @id @default(uuid())
+
+  recipientUserId String
+  recipientUser   User   @relation(fields: [recipientUserId], references: [id], onDelete: Cascade)
+
+  channel   NotificationChannel
+  eventType String
+
+  subject      String?
+  templateData Json?
+
+  relatedRecordType String?
+  relatedRecordId   String?
+
+  deliveryStatus NotificationDeliveryStatus @default(PENDING)
+  errorMessage   String?
+  sentAt         DateTime?
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([recipientUserId, deliveryStatus])
+  @@map("notifications")
+}

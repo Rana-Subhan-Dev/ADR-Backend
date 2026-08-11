@@ -1,0 +1,62 @@
+model Inquiry {
+  id String @id @default(uuid())
+
+  inquiryDate        DateTime
+  matterName         String
+  initialContactName String
+  inquiryContactType String?
+  fromFirm           String?
+  counselFor         PartySide?
+  contactEmail       String?
+  contactPhone       String?
+
+  caseType          CaseType?
+  disputeCategoryId String?
+  disputeCategory   DisputeCategory? @relation(fields: [disputeCategoryId], references: [id], onDelete: SetNull)
+
+  locationJurisdiction String?
+  daysRequested        Int?
+  timeFrameRequested   String?
+  sourceOfInquiry      String?
+  referredBy           String?
+  comments             String? @db.Text
+
+  isInternational Boolean       @default(false)
+  isDraft         Boolean       @default(true)
+  status          InquiryStatus @default(INQUIRY)
+
+  preliminaryCaseManagerId String?
+  preliminaryCaseManager   User?   @relation("InquiryPreliminaryCaseManager", fields: [preliminaryCaseManagerId], references: [id], onDelete: SetNull)
+
+  // `Case.inquiryId` is the physical FK for this 1:1 relationship — this is
+  // the virtual reverse side, populated once "Convert to Case" runs.
+  convertedCase Case?
+
+  convertedAt DateTime?
+
+  conferenceCalls CaseConferenceCall[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([status])
+  @@index([preliminaryCaseManagerId])
+  @@index([disputeCategoryId])
+  @@map("inquiries")
+}
+
+model DisputeCategory {
+  id String @id @default(uuid())
+
+  name      String  @unique
+  sortOrder Int     @default(0)
+  isActive  Boolean @default(true)
+
+  inquiries Inquiry[]
+  cases     Case[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@map("dispute_categories")
+}

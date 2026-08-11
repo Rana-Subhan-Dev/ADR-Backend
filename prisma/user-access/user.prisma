@@ -1,0 +1,81 @@
+model User {
+  id String @id @default(uuid())
+
+  email        String  @unique
+  passwordHash String?
+
+  firstName       String
+  lastName        String
+  phone           String?
+  jobTitle        String?
+  profileImageUrl String?
+
+  userType UserType
+  roleId   String
+  role     Role       @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  status   UserStatus @default(INVITED)
+
+  timezone String?
+
+  twoFactorEnabled  Boolean @default(false)
+  twoFactorRequired Boolean @default(false)
+
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+  lastLoginAt         DateTime?
+
+  lastPasswordChangeAt DateTime?
+  mustChangePassword   Boolean   @default(false)
+
+  invitedById  String?
+  invitedBy    User?   @relation("UserInvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
+  invitedUsers User[]  @relation("UserInvitedBy")
+
+  deactivatedAt    DateTime?
+  deactivatedById  String?
+  deactivatedBy    User?     @relation("UserDeactivatedBy", fields: [deactivatedById], references: [id], onDelete: SetNull)
+  deactivatedUsers User[]    @relation("UserDeactivatedBy")
+
+  deactivationReason String?
+
+  // ----------------------------------------------------------
+  // User-access domain relations
+  // ----------------------------------------------------------
+  rolePermissionUpdates      RolePermission[]         @relation("RolePermissionUpdatedBy")
+  neutralProfile             NeutralProfile?
+  accountInvitationsReceived AccountInvitation[]      @relation("AccountInvitationUser")
+  accountInvitationsSent     AccountInvitation[]      @relation("AccountInvitationInvitedBy")
+  twoFactorCredential        TwoFactorCredential?
+  passwordResetTokens        PasswordResetToken[]
+  loginAttempts              LoginAttempt[]
+  sessions                   Session[]
+  calendarConnections        UserCalendarConnection[]
+  auditLogs                  AuditLog[]
+  legalAcknowledgements      LegalAcknowledgement[]
+  notifications              Notification[]
+
+  // ----------------------------------------------------------
+  // Case-management domain relations
+  // ----------------------------------------------------------
+  preliminaryInquiries       Inquiry[]                   @relation("InquiryPreliminaryCaseManager")
+  caseParticipations         CaseParticipant[]
+  attorneyProfile            Attorney?
+  documentSubmissionRequests DocumentSubmissionRequest[]
+  uploadedDocuments          Document[]
+  uploadedDocumentVersions   DocumentVersion[]
+  grantedDocumentAccess      DocumentAccessGrant[]
+  documentAccessLogs         DocumentAccessLog[]
+  authoredCaseNotes          CaseNote[]
+  caseTimelineEvents         CaseTimelineEvent[]
+  completedChecklistItems    ChecklistItem[]
+  neutralTimesheets          NeutralTimesheet[]          @relation("NeutralTimesheetNeutral")
+  approvedTimesheets         NeutralTimesheet[]          @relation("NeutralTimesheetApprover")
+  importedMigrationBatches   MigrationBatch[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([roleId, status])
+  @@index([status, updatedAt])
+  @@map("users")
+}

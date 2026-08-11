@@ -1,0 +1,50 @@
+model Role {
+  id String @id @default(uuid())
+
+  name            RoleName @unique
+  description     String?
+  isSystemDefined Boolean  @default(true)
+
+  users           User[]
+  rolePermissions RolePermission[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@map("roles")
+}
+
+model Permission {
+  id String @id @default(uuid())
+
+  module      PermissionModule
+  action      PermissionAction
+  description String?
+
+  rolePermissions RolePermission[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+
+  @@unique([module, action])
+  @@map("permissions")
+}
+
+model RolePermission {
+  id String @id @default(uuid())
+
+  roleId       String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  isGranted Boolean @default(true)
+
+  updatedByUserId String?
+  updatedBy       User?   @relation("RolePermissionUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}

@@ -1,0 +1,30 @@
+// System-wide immutable audit trail — shared by both domains; every
+// sensitive mutation anywhere in the schema writes here.
+
+model AuditLog {
+  id String @id @default(uuid())
+
+  actingUserId           String?
+  actingUser             User?     @relation(fields: [actingUserId], references: [id], onDelete: SetNull)
+  actingUserRoleSnapshot RoleName?
+
+  action String
+  module PermissionModule
+
+  affectedRecordType String
+  affectedRecordId   String
+
+  previousValue Json?
+  newValue      Json?
+  reason        String?
+
+  ipAddress  String?
+  deviceInfo String?
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([affectedRecordType, affectedRecordId])
+  @@index([actingUserId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

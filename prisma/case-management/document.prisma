@@ -1,0 +1,155 @@
+model DocumentSubmissionRequest {
+  id String @id @default(uuid())
+
+  caseId String
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  title        String
+  instructions String?                  @db.Text
+  status       DocumentSubmissionStatus @default(NOT_STARTED)
+  dueDate      DateTime?
+
+  fulfillingDocumentId String?
+  fulfillingDocument   Document? @relation("DocumentFulfillsSubmissionRequest", fields: [fulfillingDocumentId], references: [id], onDelete: SetNull)
+
+  requestedByUserId String?
+  requestedBy       User?   @relation(fields: [requestedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([caseId, status])
+  @@index([status, dueDate])
+  @@map("document_submission_requests")
+}
+
+model DocumentCategory {
+  id String @id @default(uuid())
+
+  name      String  @unique
+  sortOrder Int     @default(0)
+  isActive  Boolean @default(true)
+  isDefault Boolean @default(false)
+
+  documents Document[]
+
+  @@map("document_categories")
+}
+
+model DocumentTag {
+  id String @id @default(uuid())
+
+  name     String  @unique
+  isCustom Boolean @default(false)
+
+  documents Document[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+
+  @@map("document_tags")
+}
+
+model Document {
+  id String @id @default(uuid())
+
+  caseId String
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String? @db.Text
+
+  categoryId String?
+  category   DocumentCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  tags DocumentTag[]
+
+  visibility       DocumentVisibility       @default(INTERNAL_ONLY)
+  reviewStatus     DocumentReviewStatus     @default(PENDING_REVIEW)
+  processingStatus DocumentProcessingStatus @default(PROCESSING)
+
+  currentVersionId String?           @unique
+  currentVersion   DocumentVersion?  @relation("DocumentCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+  versions         DocumentVersion[] @relation("DocumentVersions")
+
+  uploadedByUserId String
+  uploadedBy       User   @relation(fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+
+  accessGrants DocumentAccessGrant[]
+  accessLogs   DocumentAccessLog[]
+
+  fulfillsSubmissionRequests DocumentSubmissionRequest[] @relation("DocumentFulfillsSubmissionRequest")
+  signedForEnvelopes         DocuSignEnvelope[]
+
+  legacyReferenceId String?
+  isMigrated        Boolean         @default(false)
+  migrationBatchId  String?
+  migrationBatch    MigrationBatch? @relation(fields: [migrationBatchId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @db.Timestamp(3)
+  updatedAt DateTime  @updatedAt @db.Timestamp(3)
+  deletedAt DateTime?
+
+  @@index([caseId, categoryId, createdAt])
+  @@index([uploadedByUserId])
+  @@map("documents")
+}
+
+model DocumentVersion {
+  id String @id @default(uuid())
+
+  documentId String
+  document   Document @relation("DocumentVersions", fields: [documentId], references: [id], onDelete: Cascade)
+
+  versionNumber Int
+  fileKey       String
+  fileSizeBytes Int?
+  mimeType      String?
+  changesNotes  String?
+
+  uploadedByUserId String
+  uploadedBy       User   @relation(fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+
+  isNewVersionOfExisting Boolean @default(false)
+  notifyParticipants     Boolean @default(false)
+
+  currentForDocument Document? @relation("DocumentCurrentVersion")
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+
+  @@unique([documentId, versionNumber])
+  @@map("document_versions")
+}
+
+model DocumentAccessGrant {
+  id String @id @default(uuid())
+
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  caseParticipantId String
+  caseParticipant   CaseParticipant @relation(fields: [caseParticipantId], references: [id], onDelete: Cascade)
+
+  grantedByUserId String
+  grantedBy       User   @relation(fields: [grantedByUserId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+
+  @@unique([documentId, caseParticipantId])
+  @@map("document_access_grants")
+}
+
+model DocumentAccessLog {
+  id String @id @default(uuid())
+
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  accessedByUserId String
+  accessedBy       User   @relation(fields: [accessedByUserId], references: [id], onDelete: Restrict)
+
+  action    DocumentAccessAction
+  timestamp DateTime             @default(now()) @db.Timestamp(3)
+
+  @@index([documentId, timestamp])
+  @@map("document_access_logs")
+}

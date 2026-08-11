@@ -1,0 +1,99 @@
+// Enums shared across the user-access domain.
+
+enum UserType {
+  INTERNAL
+  EXTERNAL
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  INVITE_EXPIRED
+  DEACTIVATED
+  LOCKED
+}
+
+enum RoleName {
+  SUPER_ADMIN
+  ADMIN_LEADERSHIP
+  CASE_MANAGER
+  NEUTRAL
+  LAWYER
+  CLIENT
+  ACCOUNTING_STAFF
+}
+
+enum PermissionModule {
+  USERS
+  ROLES
+  CASES
+  PARTIES
+  ATTORNEYS
+  DOCUMENTS
+  BILLING
+  TIMESHEETS
+  DOCUSIGN
+  REPORTS
+  INTEGRATIONS
+  AUDIT_LOG
+}
+
+enum PermissionAction {
+  VIEW
+  CREATE
+  EDIT
+  DELETE
+  APPROVE
+  EXPORT
+  ASSIGN
+  INVITE
+  REVOKE
+}
+
+enum NeutralType {
+  MEDIATOR
+  ARBITRATOR
+  BOTH
+}
+
+enum AccountInvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+enum TwoFactorMethod {
+  TOTP
+  SMS
+  EMAIL
+}
+
+enum CalendarProvider {
+  GOOGLE
+  MICROSOFT_365
+}
+
+enum CalendarConnectionStatus {
+  CONNECTED
+  DISCONNECTED
+  ERROR
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  IN_APP
+}
+
+enum NotificationDeliveryStatus {
+  PENDING
+  SENT
+  DELIVERED
+  FAILED
+}
+
+enum LegalDocumentType {
+  TERMS_OF_SERVICE
+  PRIVACY_POLICY
+}

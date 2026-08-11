@@ -1,0 +1,118 @@
+model CaseParty {
+  id String @id @default(uuid())
+
+  caseId String
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  partyType PartyType
+  side      PartySide
+
+  firstName        String?
+  lastName         String?
+  organizationName String?
+
+  email String?
+  phone String?
+
+  streetAddress String?
+  city          String?
+  state         String?
+  postalCode    String?
+
+  notes String? @db.Text
+
+  legacyReferenceId String?
+  isMigrated        Boolean         @default(false)
+  migrationBatchId  String?
+  migrationBatch    MigrationBatch? @relation(fields: [migrationBatchId], references: [id], onDelete: SetNull)
+
+  representations    PartyAttorneyRepresentation[]
+  caseParticipants   CaseParticipant[]
+  payerInvoices      Invoice[]
+  docuSignRecipients DocuSignRecipient[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([caseId, side])
+  @@map("case_parties")
+}
+
+model Attorney {
+  id String @id @default(uuid())
+
+  firstName String
+  lastName  String
+  email     String?
+  phone     String?
+
+  lawFirmId String?
+  lawFirm   LawFirm? @relation(fields: [lawFirmId], references: [id], onDelete: SetNull)
+
+  linkedUserId String? @unique
+  linkedUser   User?   @relation(fields: [linkedUserId], references: [id], onDelete: SetNull)
+
+  legacyReferenceId String?
+  isMigrated        Boolean         @default(false)
+  migrationBatchId  String?
+  migrationBatch    MigrationBatch? @relation(fields: [migrationBatchId], references: [id], onDelete: SetNull)
+
+  representations    PartyAttorneyRepresentation[]
+  caseParticipants   CaseParticipant[]
+  docuSignRecipients DocuSignRecipient[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([lawFirmId])
+  @@map("attorneys")
+}
+
+model LawFirm {
+  id String @id @default(uuid())
+
+  name    String  @unique
+  address String?
+  phone   String?
+  website String?
+
+  attorneys Attorney[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@map("law_firms")
+}
+
+model Contact {
+  id String @id @default(uuid())
+
+  name  String
+  email String?
+  phone String?
+  role  String?
+  notes String?
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@map("contacts")
+}
+
+model PartyAttorneyRepresentation {
+  id String @id @default(uuid())
+
+  casePartyId String
+  caseParty   CaseParty @relation(fields: [casePartyId], references: [id], onDelete: Cascade)
+
+  attorneyId String
+  attorney   Attorney @relation(fields: [attorneyId], references: [id], onDelete: Cascade)
+
+  designation RepresentationDesignation @default(LEAD_COUNSEL)
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@unique([casePartyId, attorneyId])
+  @@map("party_attorney_representations")
+}

@@ -1,0 +1,51 @@
+model DocuSignEnvelope {
+  id String @id @default(uuid())
+
+  caseId String
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  envelopeId String                 @unique
+  templateId String?
+  status     DocuSignEnvelopeStatus @default(PENDING)
+
+  failureMessage     String?
+  sentAt             DateTime?
+  completedAt        DateTime?
+  lastReminderSentAt DateTime?
+
+  signedDocumentId String?
+  signedDocument   Document? @relation(fields: [signedDocumentId], references: [id], onDelete: SetNull)
+
+  recipients DocuSignRecipient[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([caseId, status])
+  @@map("docusign_envelopes")
+}
+
+model DocuSignRecipient {
+  id String @id @default(uuid())
+
+  envelopeId String
+  envelope   DocuSignEnvelope @relation(fields: [envelopeId], references: [id], onDelete: Cascade)
+
+  name           String
+  role           String?
+  email          String?
+  status         DocuSignRecipientStatus @default(SENT)
+  lastActivityAt DateTime?
+
+  caseParticipantId String?
+  caseParticipant   CaseParticipant? @relation(fields: [caseParticipantId], references: [id], onDelete: SetNull)
+
+  attorneyId String?
+  attorney   Attorney? @relation(fields: [attorneyId], references: [id], onDelete: SetNull)
+
+  casePartyId String?
+  caseParty   CaseParty? @relation(fields: [casePartyId], references: [id], onDelete: SetNull)
+
+  @@index([envelopeId])
+  @@map("docusign_recipients")
+}

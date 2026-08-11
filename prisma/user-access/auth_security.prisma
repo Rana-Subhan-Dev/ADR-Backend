@@ -1,0 +1,103 @@
+model TwoFactorCredential {
+  id String @id @default(uuid())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  method          TwoFactorMethod
+  secretEncrypted String
+  phoneNumber     String?
+
+  isVerified Boolean   @default(false)
+  verifiedAt DateTime?
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@map("two_factor_credentials")
+}
+
+model PasswordResetToken {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash String @unique
+
+  expiresAt   DateTime
+  usedAt      DateTime?
+  requestedIp String?
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+model LoginAttempt {
+  id String @id @default(uuid())
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  emailAttempted String
+  isSuccessful   Boolean
+  failureReason  String?
+  ipAddress      String?
+  userAgent      String?
+
+  attemptedAt DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([userId, attemptedAt])
+  @@index([emailAttempted, attemptedAt])
+  @@map("login_attempts")
+}
+
+model Session {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  accessTokenHash String @unique
+
+  ipAddress String?
+  userAgent String?
+
+  issuedAt       DateTime @db.Timestamp(3)
+  lastActivityAt DateTime @db.Timestamp(3)
+  expiresAt      DateTime @db.Timestamp(3)
+
+  revokedAt     DateTime?
+  revokedReason String?
+
+  refreshTokens RefreshToken[]
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model RefreshToken {
+  id String @id @default(uuid())
+
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  tokenHash String @unique
+
+  issuedAt  DateTime  @db.Timestamp(3)
+  expiresAt DateTime  @db.Timestamp(3)
+  usedAt    DateTime?
+
+  replacedByTokenId String?       @unique
+  replacedByToken   RefreshToken? @relation("RefreshTokenReplacement", fields: [replacedByTokenId], references: [id], onDelete: SetNull)
+  replacesToken     RefreshToken? @relation("RefreshTokenReplacement")
+
+  revokedAt DateTime?
+
+  @@index([sessionId])
+  @@map("refresh_tokens")
+}

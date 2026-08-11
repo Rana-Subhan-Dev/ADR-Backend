@@ -1,0 +1,30 @@
+// Platform-level invite lifecycle — distinct from the case-level
+// CaseParticipant.invitationStatus defined in the case-management domain.
+
+model AccountInvitation {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation("AccountInvitationUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash String                  @unique
+  status    AccountInvitationStatus @default(PENDING)
+
+  invitedById String
+  invitedBy   User   @relation("AccountInvitationInvitedBy", fields: [invitedById], references: [id], onDelete: Restrict)
+
+  expiresAt DateTime
+
+  acceptedAt DateTime?
+  revokedAt  DateTime?
+
+  resendCount Int      @default(0)
+  lastSentAt  DateTime
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([userId, status])
+  @@index([expiresAt])
+  @@index([invitedById])
+  @@map("account_invitations")
+}
