@@ -10,6 +10,7 @@ const authRoutes = require("./routes/auth.routes");
 const userRoutes = require("./routes/user.routes");
 const caseRoutes = require("./routes/case.routes");
 const inquiryRoutes = require("./routes/inquiry.routes");
+const partyRoutes = require("./routes/party.routes");
 
 const app = express();
 
@@ -60,6 +61,7 @@ app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/users", userRoutes);
 app.use("/api/v1/inquiries", inquiryRoutes);
 app.use("/api/v1/cases", caseRoutes);
+app.use("/api/v1/parties", partyRoutes);
 
 app.use(errorHandler);
 

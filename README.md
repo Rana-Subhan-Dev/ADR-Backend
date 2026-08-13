@@ -168,6 +168,38 @@ Base path: `/api/v1`
 | Users      | `/users`        | List/update users; status changes require admin    |
 | Inquiries  | `/inquiries`    | Intake + convert-to-case                           |
 | Cases      | `/cases`        | Case CRUD; case manager assigned via `CaseParticipant` |
+| Parties    | `/parties`      | Add individual or organization parties to a case |
+
+### Add a party
+
+`POST /api/v1/parties` requires an authenticated user. Supply the case ID,
+the party type (`INDIVIDUAL` or `ORGANIZATION`), and party side (`CLAIMANT`
+or `RESPONDENT`), plus any optional contact and address fields from the Add
+Party form.
+
+```json
+{
+  "caseId": "case-uuid",
+  "partyType": "INDIVIDUAL",
+  "side": "CLAIMANT",
+  "firstName": "John",
+  "lastName": "Harrington",
+  "email": "john@example.com",
+  "phone": "+1 555 0100",
+  "streetAddress": "100 Main Street",
+  "city": "Dallas",
+  "state": "TX",
+  "postalCode": "75201",
+  "notes": "Primary claimant contact"
+}
+```
+
+`GET /api/v1/parties?caseId={case-id}` lists parties for a case. Use the
+optional `search`, `partyType`, `side`, `page`, and `limit` query parameters
+to filter and paginate results.
+
+`PATCH /api/v1/parties/{party-id}` updates one or more party fields. `DELETE
+/api/v1/parties/{party-id}` removes a party.
 
 ### Auth flow
 
