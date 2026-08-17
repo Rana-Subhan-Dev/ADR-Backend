@@ -11,6 +11,8 @@ const userRoutes = require("./routes/user.routes");
 const caseRoutes = require("./routes/case.routes");
 const inquiryRoutes = require("./routes/inquiry.routes");
 const partyRoutes = require("./routes/party.routes");
+const attorneyLawFirmRoutes = require("./routes/attorneyLawFirm.routes");
+const representationRoutes = require("./routes/representation.routes");
 
 const app = express();
 
@@ -62,6 +64,8 @@ app.use("/api/v1/users", userRoutes);
 app.use("/api/v1/inquiries", inquiryRoutes);
 app.use("/api/v1/cases", caseRoutes);
 app.use("/api/v1/parties", partyRoutes);
+app.use("/api/v1/attorneys-law-firms", attorneyLawFirmRoutes);
+app.use("/api/v1/representations", representationRoutes);
 
 app.use(errorHandler);
 
