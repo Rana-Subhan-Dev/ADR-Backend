@@ -76,7 +76,7 @@ const acceptInvitation = async ({ invitationId, userId, firstName, lastName, pho
       data: { status: "ACCEPTED", acceptedAt: new Date() },
     });
 
-    return tx.user.update({
+    const user = await tx.user.update({
       where: { id: userId },
       data: {
         firstName,
@@ -89,6 +89,13 @@ const acceptInvitation = async ({ invitationId, userId, firstName, lastName, pho
       },
       select: USER_WITH_ROLE_SELECT,
     });
+
+    await tx.caseParticipant.updateMany({
+      where: { userId, invitationStatus: "INVITED" },
+      data: { invitationStatus: "ACCEPTED", accessStatus: "ACTIVE" },
+    });
+
+    return user;
   });
 };
 
