@@ -26,6 +26,9 @@ const {
   sanitizeUser,
 } = require("../utils/auth");
 
+const { sendEmail } = require("../utils/sendEmail");
+const { invitationTemplate } = require("../shared/emailTemplates/invitationEmail");
+
 const hashToken = (rawToken) =>
   crypto.createHash("sha256").update(rawToken).digest("hex");
 
@@ -71,6 +74,15 @@ const inviteUser = async (payload, invitedByUserId) => {
       lastSentAt: now,
     },
   });
+
+  const setupUrl = `${(process.env.CLIENT_URL).replace(/\/$/, "")}/accept-invitation?token=${rawToken}`;
+
+  await sendEmail(
+    "Invitation to join FEDARB",
+    invitationTemplate(roleName, setupUrl, INVITATION_EXPIRES_IN_DAYS),
+    normalizedEmail,
+    "HTML"
+  );
 
   return {
     user: sanitizeUser(user),
