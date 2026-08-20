@@ -7,6 +7,8 @@ const attorneyLawFirmRoutes = require("./attorneyLawFirm.routes");
 const representationRoutes = require("./representation.routes");
 const participantRoutes = require("./participant.routes");
 const hearingRoutes = require("./hearing.routes");
+const caseNoteRoutes = require("./caseNote.routes");
+const documentRoutes = require("./document.routes");
 const express = require("express");
 const router = express.Router();
 
@@ -46,6 +48,14 @@ const defaultRoutes = [
   {
     path: "/cases/:caseId/hearings",
     route: hearingRoutes,
+  },
+  {
+    path: "/cases/:caseId/notes",
+    route: caseNoteRoutes,
+  },
+  {
+    path: "/cases/:caseId/documents",
+    route: documentRoutes,
   },
 ];
 
