@@ -19,20 +19,20 @@ router.post("/", validate(createPartySchema), partyController.createParty);
 router.get(
   "/",
   validate(getPartiesSchema, "query"),
-  partyController.getParties
+  partyController.getParties,
 );
 
 router.patch(
   "/:id",
   validate(partyIdSchema, "params"),
   validate(updatePartySchema),
-  partyController.updateParty
+  partyController.updateParty,
 );
 
 router.delete(
   "/:id",
   validate(partyIdSchema, "params"),
-  partyController.deleteParty
+  partyController.deleteParty,
 );
 
 module.exports = router;

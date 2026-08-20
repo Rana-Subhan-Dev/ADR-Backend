@@ -45,14 +45,26 @@ const participantSelect = {
 };
 
 const findParticipantById = (id) =>
-  prisma.caseParticipant.findUnique({ where: { id }, select: participantSelect });
+  prisma.caseParticipant.findUnique({
+    where: { id },
+    select: participantSelect,
+  });
 
 const findParticipantByUserAndCase = (userId, caseId) =>
-  prisma.caseParticipant.findFirst({ where: { userId, caseId }, select: participantSelect });
+  prisma.caseParticipant.findFirst({
+    where: { userId, caseId },
+    select: participantSelect,
+  });
 
 const getParticipants = ({ where, skip, take }) =>
   prisma.$transaction([
-    prisma.caseParticipant.findMany({ where, skip, take, orderBy: { createdAt: "desc" }, select: participantSelect }),
+    prisma.caseParticipant.findMany({
+      where,
+      skip,
+      take,
+      orderBy: { createdAt: "desc" },
+      select: participantSelect,
+    }),
     prisma.caseParticipant.count({ where }),
   ]);
 
@@ -62,7 +74,10 @@ const createParticipant = (data, tx = prisma) =>
 const updateParticipant = (id, data, tx = prisma) =>
   tx.caseParticipant.update({ where: { id }, data, select: participantSelect });
 
-const createUserWithInvitation = ({ user, invitation, participant }, tx = prisma) =>
+const createUserWithInvitation = (
+  { user, invitation, participant },
+  tx = prisma,
+) =>
   tx.user.create({
     data: {
       ...user,
@@ -83,12 +98,18 @@ const createAccountInvitation = (data, tx = prisma) =>
 
 const findAttorneyForCase = (attorneyId, caseId) =>
   prisma.attorney.findFirst({
-    where: { id: attorneyId, representations: { some: { caseParty: { caseId } } } },
+    where: {
+      id: attorneyId,
+      representations: { some: { caseParty: { caseId } } },
+    },
     select: { id: true },
   });
 
 const findCasePartyForCase = (casePartyId, caseId) =>
-  prisma.caseParty.findFirst({ where: { id: casePartyId, caseId }, select: { id: true } });
+  prisma.caseParty.findFirst({
+    where: { id: casePartyId, caseId },
+    select: { id: true },
+  });
 
 const neutralSelect = {
   id: true,

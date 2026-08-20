@@ -21,31 +21,27 @@ router.post(
   auth,
   requireRole(RoleName.SUPER_ADMIN, RoleName.ADMIN_LEADERSHIP),
   validate(inviteUserSchema),
-  authController.inviteUser
+  authController.inviteUser,
 );
 
 router.post(
   "/accept-invitation",
   validate(acceptInvitationSchema),
-  authController.acceptInvitation
+  authController.acceptInvitation,
 );
 
-router.post(
-  "/signin",
-  validate(signInSchema),
-  authController.signIn
-);
+router.post("/signin", validate(signInSchema), authController.signIn);
 
 router.post(
   "/forgot-password",
   validate(forgotPasswordSchema),
-  authController.forgotPassword
+  authController.forgotPassword,
 );
 
 router.post(
   "/reset-password",
   validate(resetPasswordSchema),
-  authController.resetPassword
+  authController.resetPassword,
 );
 
 module.exports = router;

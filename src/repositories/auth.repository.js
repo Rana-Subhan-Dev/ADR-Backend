@@ -69,7 +69,14 @@ const findInvitationByTokenHash = async (tokenHash) => {
   });
 };
 
-const acceptInvitation = async ({ invitationId, userId, firstName, lastName, phone, passwordHash }) => {
+const acceptInvitation = async ({
+  invitationId,
+  userId,
+  firstName,
+  lastName,
+  phone,
+  passwordHash,
+}) => {
   return prisma.$transaction(async (tx) => {
     await tx.accountInvitation.update({
       where: { id: invitationId },
@@ -99,9 +106,23 @@ const acceptInvitation = async ({ invitationId, userId, firstName, lastName, pho
   });
 };
 
-const recordLoginAttempt = async ({ userId, emailAttempted, isSuccessful, failureReason, ipAddress, userAgent }) => {
+const recordLoginAttempt = async ({
+  userId,
+  emailAttempted,
+  isSuccessful,
+  failureReason,
+  ipAddress,
+  userAgent,
+}) => {
   return prisma.loginAttempt.create({
-    data: { userId, emailAttempted, isSuccessful, failureReason, ipAddress, userAgent },
+    data: {
+      userId,
+      emailAttempted,
+      isSuccessful,
+      failureReason,
+      ipAddress,
+      userAgent,
+    },
   });
 };
 
@@ -126,7 +147,12 @@ const resetFailedLoginAttempts = async (userId) => {
   });
 };
 
-const createPasswordResetToken = async ({ userId, tokenHash, expiresAt, requestedIp }) => {
+const createPasswordResetToken = async ({
+  userId,
+  tokenHash,
+  expiresAt,
+  requestedIp,
+}) => {
   return prisma.passwordResetToken.create({
     data: { userId, tokenHash, expiresAt, requestedIp },
   });

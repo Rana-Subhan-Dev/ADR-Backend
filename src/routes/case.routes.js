@@ -16,36 +16,28 @@ const router = express.Router();
 
 router.use(auth);
 
-router.post(
-  "/",
-  validate(createCaseSchema),
-  caseController.createCase
-);
+router.post("/", validate(createCaseSchema), caseController.createCase);
 
-router.get(
-  "/",
-  validate(getCasesSchema, "query"),
-  caseController.getCases
-);
+router.get("/", validate(getCasesSchema, "query"), caseController.getCases);
 
 router.get(
   "/:id",
   validate(caseIdSchema, "params"),
-  caseController.getCaseById
+  caseController.getCaseById,
 );
 
 router.patch(
   "/:id",
   validate(caseIdSchema, "params"),
   validate(updateCaseSchema),
-  caseController.updateCase
+  caseController.updateCase,
 );
 
 router.patch(
   "/:id/status",
   validate(caseIdSchema, "params"),
   validate(updateCaseStatusSchema),
-  caseController.updateCaseStatus
+  caseController.updateCaseStatus,
 );
 
 module.exports = router;

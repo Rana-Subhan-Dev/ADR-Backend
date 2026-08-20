@@ -26,16 +26,17 @@ const buildPagination = (page, limit, total) => {
   };
 };
 
-const getRepresentationTypeDesignation = (caseParty) => (
+const getRepresentationTypeDesignation = (caseParty) =>
   caseParty.side === "CLAIMANT"
     ? "REPRESENTS_CLAIMANT"
-    : "REPRESENTS_RESPONDENT"
-);
+    : "REPRESENTS_RESPONDENT";
 
 const mapRepresentation = (representation) => ({
   ...representation,
   role: representation.designation,
-  representationTypeDesignation: getRepresentationTypeDesignation(representation.caseParty),
+  representationTypeDesignation: getRepresentationTypeDesignation(
+    representation.caseParty,
+  ),
 });
 
 const getAuthorizedCaseParty = async (casePartyId, caseId, currentUser) => {
@@ -53,7 +54,8 @@ const getAuthorizedCaseParty = async (casePartyId, caseId, currentUser) => {
 };
 
 const getAuthorizedRepresentation = async (id, currentUser) => {
-  const representation = await representationRepository.findRepresentationById(id);
+  const representation =
+    await representationRepository.findRepresentationById(id);
 
   if (!representation) {
     throw new ApiError(404, "Representation not found.");
@@ -90,11 +92,12 @@ const getRepresentations = async (query, currentUser) => {
   if (attorneyId) where.attorneyId = attorneyId;
   if (role) where.designation = role;
 
-  const { representations, total } = await representationRepository.getRepresentations({
-    skip,
-    take: limit,
-    where,
-  });
+  const { representations, total } =
+    await representationRepository.getRepresentations({
+      skip,
+      take: limit,
+      where,
+    });
 
   return {
     representations: representations.map(mapRepresentation),
@@ -102,15 +105,17 @@ const getRepresentations = async (query, currentUser) => {
   };
 };
 
-const getRepresentationById = async (id, currentUser) => (
-  mapRepresentation(await getAuthorizedRepresentation(id, currentUser))
-);
+const getRepresentationById = async (id, currentUser) =>
+  mapRepresentation(await getAuthorizedRepresentation(id, currentUser));
 
 const updateRepresentation = async (id, data, currentUser) => {
   await getAuthorizedRepresentation(id, currentUser);
-  const representation = await representationRepository.updateRepresentation(id, {
-    designation: data.role,
-  });
+  const representation = await representationRepository.updateRepresentation(
+    id,
+    {
+      designation: data.role,
+    },
+  );
   return mapRepresentation(representation);
 };
 

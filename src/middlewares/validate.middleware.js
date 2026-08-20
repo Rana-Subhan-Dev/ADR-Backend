@@ -8,17 +8,9 @@ const validate = (schema, source = "body") => {
     });
 
     if (error) {
-      const errors = error.details.map(
-        (detail) => detail.message
-      );
+      const errors = error.details.map((detail) => detail.message);
 
-      return next(
-        new ApiError(
-          400,
-          "Validation failed",
-          errors
-        )
-      );
+      return next(new ApiError(400, "Validation failed", errors));
     }
 
     req[source] = value;

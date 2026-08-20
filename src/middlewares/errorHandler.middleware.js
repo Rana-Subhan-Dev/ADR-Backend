@@ -4,7 +4,7 @@ const errorHandler = (err, req, res, next) => {
   if (!(err instanceof ApiError)) {
     err = new ApiError(
       err.statusCode || 500,
-      err.message || "Internal Server Error"
+      err.message || "Internal Server Error",
     );
   }
 
@@ -13,10 +13,7 @@ const errorHandler = (err, req, res, next) => {
     statusCode: err.statusCode,
     message: err.message,
     errors: err.errors || [],
-    stack:
-      process.env.NODE_ENV === "development"
-        ? err.stack
-        : undefined,
+    stack: process.env.NODE_ENV === "development" ? err.stack : undefined,
   });
 };
 

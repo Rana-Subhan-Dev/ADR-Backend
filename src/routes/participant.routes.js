@@ -14,48 +14,67 @@ const {
 } = require("../validations/participant.validation");
 
 const router = express.Router({ mergeParams: true });
+
 router.use(auth);
+
 router.get(
-  "/available-neutrals", 
-  validate(caseIdSchema, "params"), 
-  participantController.getAvailableNeutrals);
+  "/available-neutrals",
+  validate(caseIdSchema, "params"),
+  participantController.getAvailableNeutrals,
+);
+
 router.put(
-  "/neutral-assignment", 
-  validate(caseIdSchema, "params"), 
-  validate(assignNeutralSchema), 
-  participantController.assignNeutral);
+  "/neutral-assignment",
+  validate(caseIdSchema, "params"),
+  validate(assignNeutralSchema),
+  participantController.assignNeutral,
+);
+
 router.post(
-  "/", 
-  validate(caseIdSchema, "params"), 
-  validate(inviteParticipantSchema), 
-  participantController.inviteParticipant);
+  "/",
+  validate(caseIdSchema, "params"),
+  validate(inviteParticipantSchema),
+  participantController.inviteParticipant,
+);
+
 router.get(
-  "/", 
-  validate(caseIdSchema, "params"), 
-  validate(getParticipantsSchema, "query"), 
-  participantController.getParticipants);
+  "/",
+  validate(caseIdSchema, "params"),
+  validate(getParticipantsSchema, "query"),
+  participantController.getParticipants,
+);
+
 router.get(
-  "/:participantId", 
-  validate(participantIdSchema, "params"), 
-  participantController.getParticipant);
+  "/:participantId",
+  validate(participantIdSchema, "params"),
+  participantController.getParticipant,
+);
+
 router.patch(
-  "/:participantId", 
-  validate(participantIdSchema, "params"), 
-  validate(updateParticipantSchema), 
-  participantController.updateParticipant);
+  "/:participantId",
+  validate(participantIdSchema, "params"),
+  validate(updateParticipantSchema),
+  participantController.updateParticipant,
+);
+
 router.post(
-  "/:participantId/resend-invitation", 
-  validate(participantIdSchema, "params"), 
-  participantController.resendInvitation);
+  "/:participantId/resend-invitation",
+  validate(participantIdSchema, "params"),
+  participantController.resendInvitation,
+);
+
 router.post(
-  "/:participantId/revoke-invitation", 
-  validate(participantIdSchema, "params"), 
-  validate(revokeParticipantSchema), 
-  participantController.revokeInvitation);
+  "/:participantId/revoke-invitation",
+  validate(participantIdSchema, "params"),
+  validate(revokeParticipantSchema),
+  participantController.revokeInvitation,
+);
+
 router.patch(
-  "/:participantId/access", 
-  validate(participantIdSchema, "params"), 
-  validate(updateAccessSchema), 
-  participantController.updateAccess);
+  "/:participantId/access",
+  validate(participantIdSchema, "params"),
+  validate(updateAccessSchema),
+  participantController.updateAccess,
+);
 
 module.exports = router;

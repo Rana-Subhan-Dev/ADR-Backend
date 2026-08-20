@@ -14,26 +14,34 @@ const router = express.Router();
 router.use(auth);
 
 router.post(
-  "/", 
-  validate(createRepresentationSchema), 
-  representationController.createRepresentation);
+  "/",
+  validate(createRepresentationSchema),
+  representationController.createRepresentation,
+);
+
 router.get(
-  "/", 
-  validate(getRepresentationsSchema, 
-    "query"), 
-    representationController.getRepresentations);
+  "/",
+  validate(getRepresentationsSchema, "query"),
+  representationController.getRepresentations,
+);
+
 router.get(
-  "/:representationId", 
-  validate(representationIdSchema, "params"), 
-  representationController.getRepresentationById);
+  "/:representationId",
+  validate(representationIdSchema, "params"),
+  representationController.getRepresentationById,
+);
+
 router.patch(
-  "/:representationId", 
-  validate(representationIdSchema, "params"), 
-  validate(updateRepresentationSchema), 
-  representationController.updateRepresentation);
+  "/:representationId",
+  validate(representationIdSchema, "params"),
+  validate(updateRepresentationSchema),
+  representationController.updateRepresentation,
+);
+
 router.delete(
-  "/:representationId", 
-  validate(representationIdSchema, "params"), 
-  representationController.deleteRepresentation);
+  "/:representationId",
+  validate(representationIdSchema, "params"),
+  representationController.deleteRepresentation,
+);
 
 module.exports = router;

@@ -10,24 +10,18 @@ const {
 
 const authRepository = require("../repositories/auth.repository");
 
-const {
-  hashPassword,
-  comparePassword,
-} = require("../utils/password");
+const { hashPassword, comparePassword } = require("../utils/password");
 
-const {
-  generateAccessToken,
-} = require("../utils/jwt");
+const { generateAccessToken } = require("../utils/jwt");
 
 const ApiError = require("../utils/apiError");
 
-const {
-  buildJwtPayload,
-  sanitizeUser,
-} = require("../utils/auth");
+const { buildJwtPayload, sanitizeUser } = require("../utils/auth");
 
 const { sendEmail } = require("../utils/sendEmail");
-const { invitationTemplate } = require("../shared/emailTemplates/invitationEmail");
+const {
+  invitationTemplate,
+} = require("../shared/emailTemplates/invitationEmail");
 
 const hashToken = (rawToken) =>
   crypto.createHash("sha256").update(rawToken).digest("hex");
@@ -53,7 +47,7 @@ const inviteUser = async (payload, invitedByUserId) => {
   const tokenHash = hashToken(rawToken);
   const now = new Date();
   const expiresAt = new Date(
-    now.getTime() + INVITATION_EXPIRES_IN_DAYS * 24 * 60 * 60 * 1000
+    now.getTime() + INVITATION_EXPIRES_IN_DAYS * 24 * 60 * 60 * 1000,
   );
 
   const user = await authRepository.createInvitedUser({
@@ -75,13 +69,13 @@ const inviteUser = async (payload, invitedByUserId) => {
     },
   });
 
-  const setupUrl = `${(process.env.CLIENT_URL).replace(/\/$/, "")}/accept-invitation?token=${rawToken}`;
+  const setupUrl = `${process.env.CLIENT_URL.replace(/\/$/, "")}/accept-invitation?token=${rawToken}`;
 
   await sendEmail(
     "Invitation to join FEDARB",
     invitationTemplate(roleName, setupUrl, INVITATION_EXPIRES_IN_DAYS),
     normalizedEmail,
-    "HTML"
+    "HTML",
   );
 
   return {
@@ -92,7 +86,13 @@ const inviteUser = async (payload, invitedByUserId) => {
   };
 };
 
-const acceptInvitation = async ({ token, firstName, lastName, phone, password }) => {
+const acceptInvitation = async ({
+  token,
+  firstName,
+  lastName,
+  phone,
+  password,
+}) => {
   const tokenHash = hashToken(token);
 
   const invitation = await authRepository.findInvitationByTokenHash(tokenHash);
@@ -102,11 +102,17 @@ const acceptInvitation = async ({ token, firstName, lastName, phone, password })
   }
 
   if (invitation.status !== "PENDING") {
-    throw new ApiError(400, "This invitation has already been used or revoked.");
+    throw new ApiError(
+      400,
+      "This invitation has already been used or revoked.",
+    );
   }
 
   if (invitation.expiresAt <= new Date()) {
-    throw new ApiError(400, "This invitation has expired. Please request a new one.");
+    throw new ApiError(
+      400,
+      "This invitation has expired. Please request a new one.",
+    );
   }
 
   const passwordHash = await hashPassword(password);
@@ -148,10 +154,14 @@ const signIn = async (payload, requestMeta = {}) => {
     throw new ApiError(403, "Please accept your invitation before signing in.");
   }
 
-  if (user.status === "LOCKED" && user.lockedUntil && user.lockedUntil > new Date()) {
+  if (
+    user.status === "LOCKED" &&
+    user.lockedUntil &&
+    user.lockedUntil > new Date()
+  ) {
     throw new ApiError(
       403,
-      `Account is locked. Please try again after ${user.lockedUntil.toISOString()}.`
+      `Account is locked. Please try again after ${user.lockedUntil.toISOString()}.`,
     );
   }
 
@@ -229,7 +239,8 @@ const forgotPassword = async (email, requestMeta = {}) => {
 const resetPassword = async ({ token, password }) => {
   const tokenHash = hashToken(token);
 
-  const resetTokenRecord = await authRepository.findPasswordResetTokenByHash(tokenHash);
+  const resetTokenRecord =
+    await authRepository.findPasswordResetTokenByHash(tokenHash);
 
   if (!resetTokenRecord || resetTokenRecord.usedAt) {
     throw new ApiError(400, "Invalid or expired reset token.");

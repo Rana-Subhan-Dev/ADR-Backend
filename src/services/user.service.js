@@ -12,10 +12,7 @@ const {
 const getUsers = async (query) => {
   const page = Number(query.page) || DEFAULT_PAGE;
 
-  const limit = Math.min(
-    Number(query.limit) || DEFAULT_LIMIT,
-    MAX_LIMIT
-  );
+  const limit = Math.min(Number(query.limit) || DEFAULT_LIMIT, MAX_LIMIT);
 
   const {
     search,

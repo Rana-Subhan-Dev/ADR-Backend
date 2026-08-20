@@ -21,46 +21,64 @@ router.use(auth);
 router.post(
   "/law-firms",
   validate(createLawFirmSchema),
-  attorneyLawFirmController.createLawFirm);
+  attorneyLawFirmController.createLawFirm,
+);
+
 router.get(
   "/law-firms",
   validate(getLawFirmsSchema, "query"),
-  attorneyLawFirmController.getLawFirms);
+  attorneyLawFirmController.getLawFirms,
+);
+
 router.get(
   "/law-firms/:lawFirmId",
   validate(lawFirmIdSchema, "params"),
-  attorneyLawFirmController.getLawFirmById);
+  attorneyLawFirmController.getLawFirmById,
+);
+
 router.patch(
   "/law-firms/:lawFirmId",
   validate(lawFirmIdSchema, "params"),
   validate(updateLawFirmSchema),
-  attorneyLawFirmController.updateLawFirm);
+  attorneyLawFirmController.updateLawFirm,
+);
+
 router.delete(
   "/law-firms/:lawFirmId",
   validate(lawFirmIdSchema, "params"),
-  attorneyLawFirmController.deleteLawFirm);
+  attorneyLawFirmController.deleteLawFirm,
+);
 
 router.post(
   "/attorneys",
   validate(createAttorneySchema),
-  attorneyLawFirmController.createAttorney);
+  attorneyLawFirmController.createAttorney,
+);
+
 router.get(
   "/attorneys",
   validate(getAttorneysSchema, "query"),
-  attorneyLawFirmController.getAttorneys);
+  attorneyLawFirmController.getAttorneys,
+);
+
 router.get(
   "/attorneys/:attorneyId",
   validate(attorneyIdSchema, "params"),
-  validate(attorneyDetailsSchema, "query"), 
-  attorneyLawFirmController.getAttorneyById);
+  validate(attorneyDetailsSchema, "query"),
+  attorneyLawFirmController.getAttorneyById,
+);
+
 router.patch(
-  "/attorneys/:attorneyId", 
-  validate(attorneyIdSchema, "params"), 
-  validate(updateAttorneySchema), 
-  attorneyLawFirmController.updateAttorney);
+  "/attorneys/:attorneyId",
+  validate(attorneyIdSchema, "params"),
+  validate(updateAttorneySchema),
+  attorneyLawFirmController.updateAttorney,
+);
+
 router.delete(
   "/attorneys/:attorneyId",
-  validate(attorneyIdSchema, "params"), 
-  attorneyLawFirmController.deleteAttorney);
+  validate(attorneyIdSchema, "params"),
+  attorneyLawFirmController.deleteAttorney,
+);
 
 module.exports = router;

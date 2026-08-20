@@ -26,7 +26,12 @@ const createInquirySchema = Joi.object({
     .valid(...Object.values(PartySide))
     .optional(),
 
-  contactEmail: Joi.string().email().trim().lowercase().allow("", null).optional(),
+  contactEmail: Joi.string()
+    .email()
+    .trim()
+    .lowercase()
+    .allow("", null)
+    .optional(),
 
   contactPhone: Joi.string()
     .trim()
@@ -59,10 +64,11 @@ const createInquirySchema = Joi.object({
   preliminaryCaseManagerId: Joi.string().uuid().allow(null).optional(),
 });
 
-const updateInquirySchema = createInquirySchema.fork(
-  ["inquiryDate", "matterName", "initialContactName"],
-  (field) => field.optional()
-).min(1);
+const updateInquirySchema = createInquirySchema
+  .fork(["inquiryDate", "matterName", "initialContactName"], (field) =>
+    field.optional(),
+  )
+  .min(1);
 
 const getInquiriesSchema = Joi.object({
   page: Joi.number().integer().min(1).default(DEFAULT_PAGE),

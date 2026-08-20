@@ -30,26 +30,30 @@ const REPRESENTATION_SELECT = {
   updatedAt: true,
 };
 
-const createRepresentation = (data) => prisma.partyAttorneyRepresentation.create({
-  data,
-  select: REPRESENTATION_SELECT,
-});
+const createRepresentation = (data) =>
+  prisma.partyAttorneyRepresentation.create({
+    data,
+    select: REPRESENTATION_SELECT,
+  });
 
-const findRepresentationById = (id) => prisma.partyAttorneyRepresentation.findUnique({
-  where: { id },
-  select: REPRESENTATION_SELECT,
-});
+const findRepresentationById = (id) =>
+  prisma.partyAttorneyRepresentation.findUnique({
+    where: { id },
+    select: REPRESENTATION_SELECT,
+  });
 
-const updateRepresentation = (id, data) => prisma.partyAttorneyRepresentation.update({
-  where: { id },
-  data,
-  select: REPRESENTATION_SELECT,
-});
+const updateRepresentation = (id, data) =>
+  prisma.partyAttorneyRepresentation.update({
+    where: { id },
+    data,
+    select: REPRESENTATION_SELECT,
+  });
 
-const deleteRepresentation = (id) => prisma.partyAttorneyRepresentation.delete({
-  where: { id },
-  select: REPRESENTATION_SELECT,
-});
+const deleteRepresentation = (id) =>
+  prisma.partyAttorneyRepresentation.delete({
+    where: { id },
+    select: REPRESENTATION_SELECT,
+  });
 
 const getRepresentations = async ({ skip, take, where }) => {
   const [representations, total] = await prisma.$transaction([
@@ -66,10 +70,11 @@ const getRepresentations = async ({ skip, take, where }) => {
   return { representations, total };
 };
 
-const findAttorneyById = (id) => prisma.attorney.findUnique({
-  where: { id },
-  select: { id: true },
-});
+const findAttorneyById = (id) =>
+  prisma.attorney.findUnique({
+    where: { id },
+    select: { id: true },
+  });
 
 module.exports = {
   createRepresentation,

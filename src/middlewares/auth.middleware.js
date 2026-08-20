@@ -60,7 +60,10 @@ const auth = asyncHandler(async (req, res, next) => {
   });
 
   if (!user) {
-    throw new ApiError(401, "User associated with this token no longer exists.");
+    throw new ApiError(
+      401,
+      "User associated with this token no longer exists.",
+    );
   }
 
   if (user.status !== "ACTIVE") {

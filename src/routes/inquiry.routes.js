@@ -19,33 +19,33 @@ router.use(auth);
 router.post(
   "/",
   validate(createInquirySchema),
-  inquiryController.createInquiry
+  inquiryController.createInquiry,
 );
 
 router.get(
   "/",
   validate(getInquiriesSchema, "query"),
-  inquiryController.getInquiries
+  inquiryController.getInquiries,
 );
 
 router.get(
   "/:id",
   validate(inquiryIdSchema, "params"),
-  inquiryController.getInquiryById
+  inquiryController.getInquiryById,
 );
 
 router.patch(
   "/:id",
   validate(inquiryIdSchema, "params"),
   validate(updateInquirySchema),
-  inquiryController.updateInquiry
+  inquiryController.updateInquiry,
 );
 
 router.post(
   "/:id/convert-to-case",
   validate(inquiryIdSchema, "params"),
   validate(convertToCaseSchema),
-  inquiryController.convertToCase
+  inquiryController.convertToCase,
 );
 
 module.exports = router;

@@ -6,7 +6,7 @@ const requireRole = (...allowedRoles) => {
 
     if (!userRole || !allowedRoles.includes(userRole)) {
       return next(
-        new ApiError(403, "You do not have permission to perform this action.")
+        new ApiError(403, "You do not have permission to perform this action."),
       );
     }
 

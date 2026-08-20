@@ -83,7 +83,7 @@ const createCase = async (data, currentUserId) => {
         caseNumber,
         lifecycleStatus: "INTAKE",
       },
-      tx
+      tx,
     );
 
     await caseRepository.setPrimaryCaseManager(newCase.id, caseManagerId, tx);

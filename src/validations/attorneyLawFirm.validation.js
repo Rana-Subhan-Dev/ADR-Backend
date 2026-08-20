@@ -3,7 +3,8 @@ const {
   RepresentationDesignation,
 } = require("../constants/attorneyLawFirm.constants");
 
-const optionalText = (max) => Joi.string().trim().max(max).allow("", null).optional();
+const optionalText = (max) =>
+  Joi.string().trim().max(max).allow("", null).optional();
 const optionalPhone = Joi.string()
   .trim()
   .pattern(/^[0-9+\-\s()]+$/)
@@ -18,9 +19,11 @@ const createLawFirmSchema = Joi.object({
   website: Joi.string().uri().trim().max(500).allow("", null).optional(),
 });
 
-const updateLawFirmSchema = createLawFirmSchema.keys({
-  name: Joi.string().trim().max(255).optional(),
-}).min(1);
+const updateLawFirmSchema = createLawFirmSchema
+  .keys({
+    name: Joi.string().trim().max(255).optional(),
+  })
+  .min(1);
 
 const lawFirmIdSchema = Joi.object({
   lawFirmId: Joi.string().uuid().required(),
@@ -40,7 +43,9 @@ const createAttorneySchema = Joi.object({
   phone: optionalPhone,
   lawFirmId: Joi.string().uuid().allow(null).optional(),
   representedPartyId: Joi.string().uuid().required(),
-  designation: Joi.string().valid(...Object.values(RepresentationDesignation)).required(),
+  designation: Joi.string()
+    .valid(...Object.values(RepresentationDesignation))
+    .required(),
 });
 
 const updateAttorneySchema = Joi.object({
@@ -59,7 +64,9 @@ const getAttorneysSchema = Joi.object({
   caseId: Joi.string().uuid().required(),
   search: Joi.string().trim().max(100).allow("").optional(),
   lawFirmId: Joi.string().uuid().optional(),
-  designation: Joi.string().valid(...Object.values(RepresentationDesignation)).optional(),
+  designation: Joi.string()
+    .valid(...Object.values(RepresentationDesignation))
+    .optional(),
   page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(100).default(10),
 });

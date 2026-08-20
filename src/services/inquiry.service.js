@@ -89,7 +89,10 @@ const updateInquiry = async (id, data) => {
   }
 
   if (existing.status === "CONVERTED") {
-    throw new ApiError(400, "This inquiry has already been converted to a case.");
+    throw new ApiError(
+      400,
+      "This inquiry has already been converted to a case.",
+    );
   }
 
   return inquiryRepository.updateInquiry(id, data);
@@ -103,11 +106,17 @@ const convertToCase = async (id, payload = {}) => {
   }
 
   if (inquiry.status === "CONVERTED") {
-    throw new ApiError(400, "This inquiry has already been converted to a case.");
+    throw new ApiError(
+      400,
+      "This inquiry has already been converted to a case.",
+    );
   }
 
   if (inquiry.status === "ARCHIVED") {
-    throw new ApiError(400, "Archived inquiries cannot be converted to a case.");
+    throw new ApiError(
+      400,
+      "Archived inquiries cannot be converted to a case.",
+    );
   }
 
   const caseType = payload.caseType || inquiry.caseType;
@@ -115,16 +124,17 @@ const convertToCase = async (id, payload = {}) => {
   if (!caseType) {
     throw new ApiError(
       400,
-      "caseType is required (the inquiry does not have one set)."
+      "caseType is required (the inquiry does not have one set).",
     );
   }
 
-  const caseManagerId = payload.caseManagerId || inquiry.preliminaryCaseManagerId;
+  const caseManagerId =
+    payload.caseManagerId || inquiry.preliminaryCaseManagerId;
 
   if (!caseManagerId) {
     throw new ApiError(
       400,
-      "caseManagerId is required (the inquiry has no preliminary case manager)."
+      "caseManagerId is required (the inquiry has no preliminary case manager).",
     );
   }
 
@@ -139,12 +149,13 @@ const convertToCase = async (id, payload = {}) => {
         inquiryId: inquiry.id,
         title: payload.title || inquiry.matterName,
         caseType,
-        disputeCategoryId: payload.disputeCategoryId || inquiry.disputeCategoryId,
+        disputeCategoryId:
+          payload.disputeCategoryId || inquiry.disputeCategoryId,
         jurisdiction: inquiry.locationJurisdiction,
         isInternational: inquiry.isInternational,
         lifecycleStatus: "INTAKE",
       },
-      tx
+      tx,
     );
 
     await caseRepository.setPrimaryCaseManager(newCase.id, caseManagerId, tx);

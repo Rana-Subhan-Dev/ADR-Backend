@@ -39,7 +39,9 @@ const convertToCase = asyncHandler(async (req, res) => {
 
   return res
     .status(201)
-    .json(new ApiResponse(201, result, "Inquiry converted to a case successfully."));
+    .json(
+      new ApiResponse(201, result, "Inquiry converted to a case successfully."),
+    );
 });
 
 module.exports = {
