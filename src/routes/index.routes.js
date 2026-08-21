@@ -9,6 +9,9 @@ const participantRoutes = require("./participant.routes");
 const hearingRoutes = require("./hearing.routes");
 const caseNoteRoutes = require("./caseNote.routes");
 const documentRoutes = require("./document.routes");
+const timelineChecklistRoutes = require("./timelineChecklist.routes");
+const timesheetRoutes = require("./timesheet.routes");
+const docusignRoutes = require("./docusign.routes");
 const express = require("express");
 const router = express.Router();
 
@@ -56,6 +59,18 @@ const defaultRoutes = [
   {
     path: "/cases/:caseId/documents",
     route: documentRoutes,
+  },
+  {
+    path: "/cases/:caseId",
+    route: timelineChecklistRoutes,
+  },
+  {
+    path: "/cases/:caseId/timesheets",
+    route: timesheetRoutes,
+  },
+  {
+    path: "/cases/:caseId/docusign",
+    route: docusignRoutes,
   },
 ];
 
