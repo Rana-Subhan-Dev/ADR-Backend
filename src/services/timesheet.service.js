@@ -5,6 +5,9 @@ const ApiError = require("../utils/apiError");
 
 const managerRoles = ["SUPER_ADMIN", "ADMIN_LEADERSHIP", "CASE_MANAGER"];
 const isManager = (user) => managerRoles.includes(user.role?.name);
+const canReviewTimesheets = (user) =>
+  ["SUPER_ADMIN", "ACCOUNTING_STAFF"].includes(user.role?.name);
+const canAccessFinance = (user) => isManager(user) || canReviewTimesheets(user);
 
 const paginate = (timesheets, total, page, limit) => ({
   timesheets,
@@ -42,7 +45,10 @@ const getTimesheet = async (caseId, timesheetId, currentUser) => {
   const timesheet = await timesheetRepository.findById(timesheetId);
   if (!timesheet || timesheet.caseId !== caseId)
     throw new ApiError(404, "Timesheet entry not found.");
-  if (!isManager(currentUser) && timesheet.neutralUserId !== currentUser.id)
+  if (
+    !canAccessFinance(currentUser) &&
+    timesheet.neutralUserId !== currentUser.id
+  )
     throw new ApiError(403, "You do not have access to this timesheet entry.");
   return timesheet;
 };
@@ -92,7 +98,7 @@ const writeTimeline = (
 const createTimesheet = async (caseId, data, currentUser) => {
   await caseService.getCaseById(caseId, currentUser);
   const neutralUserId =
-    isManager(currentUser) && data.neutralUserId
+    canAccessFinance(currentUser) && data.neutralUserId
       ? data.neutralUserId
       : currentUser.id;
   await assertNeutral(caseId, neutralUserId);
@@ -121,14 +127,15 @@ const createTimesheet = async (caseId, data, currentUser) => {
 
 const getTimesheets = async (caseId, query, currentUser) => {
   await caseService.getCaseById(caseId, currentUser);
-  if (!isManager(currentUser)) await assertNeutral(caseId, currentUser.id);
+  if (!canAccessFinance(currentUser))
+    await assertNeutral(caseId, currentUser.id);
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 20;
   const where = {
     caseId,
-    ...(!isManager(currentUser) && { neutralUserId: currentUser.id }),
+    ...(!canAccessFinance(currentUser) && { neutralUserId: currentUser.id }),
     ...(query.neutralUserId &&
-      isManager(currentUser) && { neutralUserId: query.neutralUserId }),
+      canAccessFinance(currentUser) && { neutralUserId: query.neutralUserId }),
     ...(query.status && { status: query.status }),
     ...(query.approvalStatus && { approvalStatus: query.approvalStatus }),
     ...(query.activityType && { activityType: query.activityType }),
@@ -254,7 +261,7 @@ const submitTimesheet = async (caseId, timesheetId, currentUser) => {
 
 const reviewTimesheet = async (caseId, timesheetId, data, currentUser) => {
   const timesheet = await getTimesheet(caseId, timesheetId, currentUser);
-  if (!isManager(currentUser))
+  if (!canReviewTimesheets(currentUser))
     throw new ApiError(
       403,
       "You do not have permission to review timesheet entries.",

@@ -31,6 +31,23 @@ const inviteUser = async (payload, invitedByUserId) => {
 
   const normalizedEmail = email.toLowerCase().trim();
 
+  const internalRoles = new Set([
+    "SUPER_ADMIN",
+    "ADMIN_LEADERSHIP",
+    "CASE_MANAGER",
+    "ACCOUNTING_STAFF",
+  ]);
+  const expectedUserType = internalRoles.has(roleName)
+    ? "INTERNAL"
+    : "EXTERNAL";
+
+  if (userType !== expectedUserType) {
+    throw new ApiError(
+      400,
+      "The selected role is not valid for the specified user type.",
+    );
+  }
+
   const existingUser = await authRepository.findUserByEmail(normalizedEmail);
 
   if (existingUser) {

@@ -53,6 +53,14 @@ const auth = asyncHandler(async (req, res, next) => {
         select: {
           id: true,
           name: true,
+          rolePermissions: {
+            where: { isGranted: true },
+            select: {
+              permission: {
+                select: { module: true, action: true },
+              },
+            },
+          },
         },
       },
       createdAt: true,

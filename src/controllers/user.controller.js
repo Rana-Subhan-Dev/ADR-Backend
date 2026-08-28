@@ -32,6 +32,7 @@ const updateUserStatus = asyncHandler(async (req, res) => {
     status: req.body.status,
     reason: req.body.reason,
     actingUserId: req.user.id,
+    actingUserRole: req.user.role?.name,
   });
 
   return res

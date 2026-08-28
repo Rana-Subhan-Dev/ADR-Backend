@@ -5,6 +5,14 @@ const auth = require("../middlewares/auth.middleware");
 const requireRole = require("../middlewares/role.middleware");
 const validate = require("../middlewares/validate.middleware");
 const { RoleName } = require("../constants/auth.constants");
+const {
+  requirePermission,
+  requireSelfOrPermission,
+} = require("../middlewares/permission.middleware");
+const {
+  PermissionModule,
+  PermissionAction,
+} = require("../constants/permission.constants");
 
 const {
   getUsersSchema,
@@ -17,16 +25,23 @@ const router = express.Router();
 
 router.use(auth);
 
-router.get("/", validate(getUsersSchema, "query"), userController.getUsers);
+router.get(
+  "/",
+  requireSelfOrPermission(PermissionModule.USERS, PermissionAction.VIEW),
+  validate(getUsersSchema, "query"),
+  userController.getUsers,
+);
 
 router.get(
   "/:id",
+  requirePermission(PermissionModule.USERS, PermissionAction.VIEW),
   validate(userIdSchema, "params"),
   userController.getUserById,
 );
 
 router.patch(
   "/:id",
+  requireSelfOrPermission(PermissionModule.USERS, PermissionAction.EDIT),
   validate(userIdSchema, "params"),
   validate(updateUserSchema),
   userController.updateUser,

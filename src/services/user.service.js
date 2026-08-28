@@ -1,4 +1,5 @@
 const userRepository = require("../repositories/user.repository");
+const prisma = require("../config/prisma");
 const ApiError = require("../utils/apiError");
 
 const {
@@ -86,7 +87,13 @@ const updateUser = async (id, data) => {
   return userRepository.updateUser(id, data);
 };
 
-const updateUserStatus = async ({ userId, status, reason, actingUserId }) => {
+const updateUserStatus = async ({
+  userId,
+  status,
+  reason,
+  actingUserId,
+  actingUserRole,
+}) => {
   const existingUser = await userRepository.findUserById(userId);
 
   if (!existingUser) {
@@ -95,6 +102,10 @@ const updateUserStatus = async ({ userId, status, reason, actingUserId }) => {
 
   if (!ADMIN_SETTABLE_STATUSES.includes(status)) {
     throw new ApiError(400, "Invalid status.");
+  }
+
+  if (userId === actingUserId && status !== "ACTIVE") {
+    throw new ApiError(400, "You cannot deactivate or lock your own account.");
   }
 
   const data = { status };
@@ -113,7 +124,33 @@ const updateUserStatus = async ({ userId, status, reason, actingUserId }) => {
     data.lockedUntil = null;
   }
 
-  return userRepository.updateUser(userId, data);
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.user.update({
+      where: { id: userId },
+      data,
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actingUserId,
+        actingUserRoleSnapshot: actingUserRole || null,
+        action:
+          status === "DEACTIVATED"
+            ? "DEACTIVATE"
+            : status === "LOCKED"
+              ? "LOCK"
+              : "REACTIVATE",
+        module: "USERS",
+        affectedRecordType: "User",
+        affectedRecordId: userId,
+        previousValue: { status: existingUser.status },
+        newValue: { status: updated.status },
+        reason: reason || null,
+      },
+    });
+
+    return updated;
+  });
 };
 
 module.exports = {

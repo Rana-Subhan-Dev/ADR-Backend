@@ -8,6 +8,15 @@ const managerRoles = ["SUPER_ADMIN", "ADMIN_LEADERSHIP", "CASE_MANAGER"];
 
 const isManager = (user) => managerRoles.includes(user.role?.name);
 
+const assertCanSetVisibility = (visibility, currentUser) => {
+  if (!isManager(currentUser) && visibility !== "ALL_AUTHORIZED_PARTICIPANTS") {
+    throw new ApiError(
+      403,
+      "External users may only upload documents for authorized case participants.",
+    );
+  }
+};
+
 const assertRecipients = async (
   caseId,
   visibility,
@@ -141,6 +150,7 @@ const getAuthorizedDocument = async (
 
 const uploadDocument = async (caseId, data, file, currentUser) => {
   await caseService.getCaseById(caseId, currentUser);
+  assertCanSetVisibility(data.visibility, currentUser);
   if (!file) throw new ApiError(400, "A document file is required.");
   const storedFile = await storageProvider.uploadFile(file);
   try {
@@ -467,6 +477,7 @@ const updateVisibility = async (caseId, documentId, data, currentUser) => {
   const document = await getAuthorizedDocument(caseId, documentId, currentUser);
   if (!isManager(currentUser) && document.uploadedByUserId !== currentUser.id)
     throw new ApiError(403, "You do not have permission to change visibility.");
+  assertCanSetVisibility(data.visibility, currentUser);
   return prisma.$transaction(async (tx) => {
     await assertRecipients(
       caseId,

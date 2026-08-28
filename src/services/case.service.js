@@ -57,7 +57,7 @@ const generateCaseNumber = async (caseType, tx) => {
 const assertActiveCaseManager = async (caseManagerId) => {
   const manager = await prisma.user.findUnique({
     where: { id: caseManagerId },
-    select: { id: true, status: true },
+    select: { id: true, status: true, role: { select: { name: true } } },
   });
 
   if (!manager) {
@@ -66,6 +66,10 @@ const assertActiveCaseManager = async (caseManagerId) => {
 
   if (manager.status !== "ACTIVE") {
     throw new ApiError(400, "Selected case manager is not an active user.");
+  }
+
+  if (manager.role.name !== "CASE_MANAGER") {
+    throw new ApiError(400, "Selected user must have the Case Manager role.");
   }
 };
 
@@ -94,11 +98,25 @@ const createCase = async (data, currentUserId) => {
   return mapCase(await caseRepository.findCaseById(createdCaseId));
 };
 
-const assertCaseAccess = (caseData, currentUser) => {
-  if (
-    currentUser.role?.name === "CASE_MANAGER" &&
-    caseData.caseManager?.id !== currentUser.id
-  ) {
+const hasGlobalCaseAccess = (roleName) =>
+  ["SUPER_ADMIN", "ADMIN_LEADERSHIP", "ACCOUNTING_STAFF"].includes(roleName);
+
+const assertCaseAccess = async (caseData, currentUser) => {
+  const roleName = currentUser.role?.name;
+
+  if (hasGlobalCaseAccess(roleName)) return;
+
+  const participant = await prisma.caseParticipant.findFirst({
+    where: {
+      caseId: caseData.id,
+      userId: currentUser.id,
+      role: roleName,
+      accessStatus: "ACTIVE",
+    },
+    select: { id: true },
+  });
+
+  if (!participant) {
     throw new ApiError(403, "You do not have access to this case.");
   }
 };
@@ -110,7 +128,7 @@ const getCaseById = async (id, currentUser) => {
     throw new ApiError(404, "Case not found.");
   }
 
-  assertCaseAccess(caseData, currentUser);
+  await assertCaseAccess(caseData, currentUser);
 
   return caseData;
 };
@@ -132,9 +150,13 @@ const getCases = async (query, currentUser) => {
 
   const where = {};
 
-  if (currentUser.role?.name === "CASE_MANAGER") {
+  if (!hasGlobalCaseAccess(currentUser.role?.name)) {
     where.participants = {
-      some: { userId: currentUser.id, role: "CASE_MANAGER" },
+      some: {
+        userId: currentUser.id,
+        role: currentUser.role?.name,
+        accessStatus: "ACTIVE",
+      },
     };
   } else if (caseManagerId) {
     where.participants = {
@@ -193,7 +215,7 @@ const updateCase = async (id, data, currentUser) => {
     throw new ApiError(404, "Case not found.");
   }
 
-  assertCaseAccess(existingCase, currentUser);
+  await assertCaseAccess(existingCase, currentUser);
 
   const { caseManagerId, ...caseData } = data;
 
@@ -217,7 +239,7 @@ const updateCaseStatus = async (id, lifecycleStatus, currentUser) => {
     throw new ApiError(404, "Case not found.");
   }
 
-  assertCaseAccess(existingCase, currentUser);
+  await assertCaseAccess(existingCase, currentUser);
 
   return mapCase(await caseRepository.updateCase(id, { lifecycleStatus }));
 };
