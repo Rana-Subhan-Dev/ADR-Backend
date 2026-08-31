@@ -26,13 +26,50 @@ const buildPagination = (page, limit, total) => {
   };
 };
 
+const hasGlobalLawFirmAccess = (roleName) =>
+  [
+    "SUPER_ADMIN",
+    "ADMIN_LEADERSHIP",
+    "CASE_MANAGER",
+    "ACCOUNTING_STAFF",
+  ].includes(roleName);
+
+const accessibleLawFirmWhere = (currentUser) => {
+  if (hasGlobalLawFirmAccess(currentUser.role?.name)) return {};
+
+  return {
+    attorneys: {
+      some: {
+        representations: {
+          some: {
+            caseParty: {
+              case: {
+                participants: {
+                  some: {
+                    userId: currentUser.id,
+                    role: currentUser.role?.name,
+                    accessStatus: "ACTIVE",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+};
+
 const createLawFirm = (data) => attorneyLawFirmRepository.createLawFirm(data);
 
-const getLawFirms = async (query) => {
+const getLawFirms = async (query, currentUser) => {
   const { page, limit, skip } = getPagination(query);
-  const where = query.search
-    ? { name: { contains: query.search, mode: "insensitive" } }
-    : {};
+  const where = {
+    ...accessibleLawFirmWhere(currentUser),
+    ...(query.search && {
+      name: { contains: query.search, mode: "insensitive" },
+    }),
+  };
   const { lawFirms, total } = await attorneyLawFirmRepository.getLawFirms({
     skip,
     take: limit,
@@ -41,19 +78,22 @@ const getLawFirms = async (query) => {
   return { lawFirms, pagination: buildPagination(page, limit, total) };
 };
 
-const getLawFirmById = async (id) => {
-  const lawFirm = await attorneyLawFirmRepository.findLawFirmById(id);
+const getLawFirmById = async (id, currentUser) => {
+  const lawFirm = await attorneyLawFirmRepository.findLawFirm({
+    id,
+    ...accessibleLawFirmWhere(currentUser),
+  });
   if (!lawFirm) throw new ApiError(404, "Law firm not found.");
   return lawFirm;
 };
 
-const updateLawFirm = async (id, data) => {
-  await getLawFirmById(id);
+const updateLawFirm = async (id, data, currentUser) => {
+  await getLawFirmById(id, currentUser);
   return attorneyLawFirmRepository.updateLawFirm(id, data);
 };
 
-const deleteLawFirm = async (id) => {
-  await getLawFirmById(id);
+const deleteLawFirm = async (id, currentUser) => {
+  await getLawFirmById(id, currentUser);
   return attorneyLawFirmRepository.deleteLawFirm(id);
 };
 
@@ -72,7 +112,8 @@ const getAuthorizedCaseParty = async (partyId, caseId, currentUser) => {
 const createAttorney = async (data, currentUser) => {
   const { caseId, representedPartyId, designation, ...attorneyData } = data;
   await getAuthorizedCaseParty(representedPartyId, caseId, currentUser);
-  if (attorneyData.lawFirmId) await getLawFirmById(attorneyData.lawFirmId);
+  if (attorneyData.lawFirmId)
+    await getLawFirmById(attorneyData.lawFirmId, currentUser);
   return attorneyLawFirmRepository.createAttorneyWithRepresentation(
     attorneyData,
     {
@@ -145,7 +186,7 @@ const updateAttorney = async (id, data, currentUser) => {
       caseService.getCaseById(caseId, currentUser),
     ),
   );
-  if (data.lawFirmId) await getLawFirmById(data.lawFirmId);
+  if (data.lawFirmId) await getLawFirmById(data.lawFirmId, currentUser);
   return attorneyLawFirmRepository.updateAttorney(id, data);
 };
 

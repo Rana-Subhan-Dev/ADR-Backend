@@ -27,6 +27,8 @@ const createLawFirm = (data) =>
   prisma.lawFirm.create({ data, select: LAW_FIRM_SELECT });
 const findLawFirmById = (id) =>
   prisma.lawFirm.findUnique({ where: { id }, select: LAW_FIRM_SELECT });
+const findLawFirm = (where) =>
+  prisma.lawFirm.findFirst({ where, select: LAW_FIRM_SELECT });
 const updateLawFirm = (id, data) =>
   prisma.lawFirm.update({ where: { id }, data, select: LAW_FIRM_SELECT });
 const deleteLawFirm = (id) =>
@@ -119,6 +121,7 @@ const findAttorneyCaseIds = (attorneyId) =>
 module.exports = {
   createLawFirm,
   findLawFirmById,
+  findLawFirm,
   updateLawFirm,
   deleteLawFirm,
   getLawFirms,

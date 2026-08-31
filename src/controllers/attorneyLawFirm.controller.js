@@ -10,7 +10,7 @@ const createLawFirm = asyncHandler(async (req, res) => {
 });
 
 const getLawFirms = asyncHandler(async (req, res) => {
-  const result = await attorneyLawFirmService.getLawFirms(req.query);
+  const result = await attorneyLawFirmService.getLawFirms(req.query, req.user);
   return res
     .status(200)
     .json(new ApiResponse(200, result, "Law firms fetched successfully."));
@@ -19,6 +19,7 @@ const getLawFirms = asyncHandler(async (req, res) => {
 const getLawFirmById = asyncHandler(async (req, res) => {
   const result = await attorneyLawFirmService.getLawFirmById(
     req.params.lawFirmId,
+    req.user,
   );
   return res
     .status(200)
@@ -29,6 +30,7 @@ const updateLawFirm = asyncHandler(async (req, res) => {
   const result = await attorneyLawFirmService.updateLawFirm(
     req.params.lawFirmId,
     req.body,
+    req.user,
   );
   return res
     .status(200)
@@ -36,7 +38,7 @@ const updateLawFirm = asyncHandler(async (req, res) => {
 });
 
 const deleteLawFirm = asyncHandler(async (req, res) => {
-  await attorneyLawFirmService.deleteLawFirm(req.params.lawFirmId);
+  await attorneyLawFirmService.deleteLawFirm(req.params.lawFirmId, req.user);
   return res
     .status(200)
     .json(new ApiResponse(200, null, "Law firm deleted successfully."));

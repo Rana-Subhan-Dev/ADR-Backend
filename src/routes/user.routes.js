@@ -34,7 +34,7 @@ router.get(
 
 router.get(
   "/:id",
-  requirePermission(PermissionModule.USERS, PermissionAction.VIEW),
+  requireSelfOrPermission(PermissionModule.USERS, PermissionAction.VIEW),
   validate(userIdSchema, "params"),
   userController.getUserById,
 );
