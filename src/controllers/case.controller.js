@@ -79,10 +79,60 @@ const updateCaseStatus = asyncHandler(async (req, res) => {
   );
 });
 
+const getClosureChecklist = asyncHandler(async (req, res) => {
+  const result = await caseService.getClosureChecklist(
+    req.params.id,
+    req.user
+  );
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      result,
+      "Closure checklist fetched successfully."
+    )
+  );
+});
+
+const closeCase = asyncHandler(async (req, res) => {
+  const result = await caseService.closeCase(
+    req.params.id,
+    req.body,
+    req.user
+  );
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      result,
+      "Case closed successfully."
+    )
+  );
+});
+
+const reopenCase = asyncHandler(async (req, res) => {
+  const result = await caseService.reopenCase(
+    req.params.id,
+    req.body,
+    req.user
+  );
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      result,
+      "Case reopened successfully."
+    )
+  );
+});
+
 module.exports = {
   createCase,
   getCases,
   getCaseById,
   updateCase,
   updateCaseStatus,
+  getClosureChecklist,
+  closeCase,
+  reopenCase,
 };

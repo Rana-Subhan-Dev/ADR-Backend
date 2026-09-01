@@ -11,6 +11,9 @@ const CASE_SELECT = {
     select: { id: true, name: true },
   },
   lifecycleStatus: true,
+  closedAt: true,
+  closureSummary: true,
+  reopenReason: true,
   jurisdiction: true,
   isInternational: true,
   caseValue: true,
@@ -105,6 +108,7 @@ const findPrimaryCaseManagerParticipant = async (caseId) => {
 };
 
 module.exports = {
+  CASE_SELECT,
   createCase,
   findCaseById,
   getCases,

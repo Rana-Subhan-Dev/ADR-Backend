@@ -27,6 +27,7 @@ model Case {
   nextStep        String?
 
   jurisdiction   String?
+  closedAt       DateTime?
   closureSummary String? @db.Text
   reopenReason   String?
 

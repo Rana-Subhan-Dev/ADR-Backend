@@ -19,6 +19,8 @@ const {
   caseIdSchema,
   updateCaseSchema,
   updateCaseStatusSchema,
+  closeCaseSchema,
+  reopenCaseSchema,
 } = require("../validations/case.validation");
 
 const router = express.Router();
@@ -42,6 +44,44 @@ router.get(
   requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
   validate(getCasesSchema, "query"),
   caseController.getCases,
+);
+
+router.get(
+  "/:id/closure-checklist",
+  requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
+  requireInternalRole(
+    RoleName.SUPER_ADMIN,
+    RoleName.ADMIN_LEADERSHIP,
+    RoleName.CASE_MANAGER,
+  ),
+  validate(caseIdSchema, "params"),
+  caseController.getClosureChecklist,
+);
+
+router.post(
+  "/:id/close",
+  requirePermission(PermissionModule.CASES, PermissionAction.EDIT),
+  requireInternalRole(
+    RoleName.SUPER_ADMIN,
+    RoleName.ADMIN_LEADERSHIP,
+    RoleName.CASE_MANAGER,
+  ),
+  validate(caseIdSchema, "params"),
+  validate(closeCaseSchema),
+  caseController.closeCase,
+);
+
+router.post(
+  "/:id/reopen",
+  requirePermission(PermissionModule.CASES, PermissionAction.EDIT),
+  requireInternalRole(
+    RoleName.SUPER_ADMIN,
+    RoleName.ADMIN_LEADERSHIP,
+    RoleName.CASE_MANAGER,
+  ),
+  validate(caseIdSchema, "params"),
+  validate(reopenCaseSchema),
+  caseController.reopenCase,
 );
 
 router.get(

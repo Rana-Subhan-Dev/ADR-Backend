@@ -1,0 +1,1 @@
+-- Representation designation and role fields are covered by the initial migration.

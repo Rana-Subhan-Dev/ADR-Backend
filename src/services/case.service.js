@@ -9,6 +9,9 @@ const {
   MAX_LIMIT,
   CASE_SORT_FIELDS,
   CASE_PREFIXES,
+  CLOSURE_CHECKLIST_LABELS,
+  CLOSURE_DERIVED_LABELS,
+  CLOSABLE_STATUSES,
 } = require("../constants/case.constants");
 
 const mapCase = (caseRecord) => {
@@ -208,6 +211,241 @@ const getCases = async (query, currentUser) => {
   };
 };
 
+const assertCaseNotClosed = (caseData) => {
+  if (caseData.lifecycleStatus === "CLOSED") {
+    throw new ApiError(400, "Closed cases are read-only.");
+  }
+};
+
+const evaluateDerivedClosureStatus = async (caseId, label) => {
+  switch (label) {
+    case "Outcome Notes Added":
+      return (
+        (await prisma.caseNote.count({
+          where: { caseId, noteType: "CASE_UPDATE" },
+        })) > 0
+      );
+    case "Final Hearing Completed":
+      return (
+        (await prisma.hearing.count({
+          where: { caseId, hearingStatus: "COMPLETED" },
+        })) > 0
+      );
+    case "Required Documents Uploaded":
+      return (
+        (await prisma.document.count({
+          where: { caseId, deletedAt: null },
+        })) > 0
+      );
+    default:
+      return null;
+  }
+};
+
+const ensureClosureChecklist = async (caseId, tx = prisma) => {
+  const existing = await tx.checklistItem.findMany({
+    where: { caseId, category: "CLOSURE" },
+    select: { id: true, label: true, status: true },
+  });
+  const existingLabels = new Set(existing.map((item) => item.label));
+  const missingLabels = CLOSURE_CHECKLIST_LABELS.filter(
+    (label) => !existingLabels.has(label),
+  );
+
+  if (missingLabels.length) {
+    await tx.checklistItem.createMany({
+      data: missingLabels.map((label) => ({
+        caseId,
+        category: "CLOSURE",
+        label,
+        type: "SYSTEM_DERIVED",
+        status: "PENDING",
+        relatedModule: "CASES",
+      })),
+    });
+  }
+
+  return tx.checklistItem.findMany({
+    where: { caseId, category: "CLOSURE" },
+    orderBy: { createdAt: "asc" },
+    select: {
+      id: true,
+      label: true,
+      status: true,
+      type: true,
+      completedAt: true,
+      completedByUserId: true,
+    },
+  });
+};
+
+const syncDerivedClosureChecklist = async (caseId, tx = prisma) => {
+  const items = await ensureClosureChecklist(caseId, tx);
+
+  for (const item of items) {
+    if (!CLOSURE_DERIVED_LABELS.has(item.label) || item.status === "COMPLETE") {
+      continue;
+    }
+
+    const isComplete = await evaluateDerivedClosureStatus(caseId, item.label);
+
+    if (isComplete) {
+      await tx.checklistItem.update({
+        where: { id: item.id },
+        data: {
+          status: "COMPLETE",
+          completedAt: new Date(),
+        },
+      });
+      item.status = "COMPLETE";
+      item.completedAt = new Date();
+    }
+  }
+
+  return items;
+};
+
+const getClosureChecklist = async (id, currentUser) => {
+  const caseData = await getCaseById(id, currentUser);
+  assertCaseNotClosed(caseData);
+
+  const items = await syncDerivedClosureChecklist(id);
+  const allComplete = items.every((item) => item.status === "COMPLETE");
+
+  return {
+    items,
+    allComplete,
+    canClose: allComplete,
+  };
+};
+
+const writeCaseTimelineEvent = (
+  tx,
+  caseId,
+  currentUser,
+  eventType,
+  summary,
+  previousValue,
+  newValue,
+) =>
+  tx.caseTimelineEvent.create({
+    data: {
+      caseId,
+      eventType,
+      relatedRecordType: "Case",
+      relatedRecordId: caseId,
+      summary,
+      actorUserId: currentUser.id,
+      previousValue: previousValue ? JSON.stringify(previousValue) : null,
+      newValue: newValue ? JSON.stringify(newValue) : null,
+    },
+  });
+
+const closeCase = async (id, data, currentUser) => {
+  const existingCase = mapCase(await caseRepository.findCaseById(id));
+
+  if (!existingCase) {
+    throw new ApiError(404, "Case not found.");
+  }
+
+  await assertCaseAccess(existingCase, currentUser);
+
+  if (!CLOSABLE_STATUSES.has(existingCase.lifecycleStatus)) {
+    throw new ApiError(
+      400,
+      "Only active or reopened cases can be closed.",
+    );
+  }
+
+  const closedAt = new Date(data.closeDate);
+
+  return prisma.$transaction(async (tx) => {
+    const items = await syncDerivedClosureChecklist(id, tx);
+    const incompleteItems = items.filter((item) => item.status !== "COMPLETE");
+
+    if (incompleteItems.length) {
+      throw new ApiError(
+        400,
+        "All closure checklist items must be completed before closing the case.",
+      );
+    }
+
+    const updatedCase = await tx.case.update({
+      where: { id },
+      data: {
+        lifecycleStatus: "CLOSED",
+        closedAt,
+        closureSummary: data.closureSummary,
+        reopenReason: null,
+      },
+      select: caseRepository.CASE_SELECT,
+    });
+
+    await writeCaseTimelineEvent(
+      tx,
+      id,
+      currentUser,
+      "CASE_CLOSED",
+      "Case closed.",
+      {
+        lifecycleStatus: existingCase.lifecycleStatus,
+        closedAt: existingCase.closedAt,
+      },
+      {
+        lifecycleStatus: "CLOSED",
+        closedAt,
+        closureSummary: data.closureSummary,
+      },
+    );
+
+    return mapCase(updatedCase);
+  });
+};
+
+const reopenCase = async (id, data, currentUser) => {
+  const existingCase = mapCase(await caseRepository.findCaseById(id));
+
+  if (!existingCase) {
+    throw new ApiError(404, "Case not found.");
+  }
+
+  await assertCaseAccess(existingCase, currentUser);
+
+  if (existingCase.lifecycleStatus !== "CLOSED") {
+    throw new ApiError(400, "Only closed cases can be reopened.");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const updatedCase = await tx.case.update({
+      where: { id },
+      data: {
+        lifecycleStatus: "REOPENED",
+        reopenReason: data.reopenReason,
+        closedAt: null,
+      },
+      select: caseRepository.CASE_SELECT,
+    });
+
+    await writeCaseTimelineEvent(
+      tx,
+      id,
+      currentUser,
+      "CASE_REOPENED",
+      `Case reopened: ${data.reopenReason}`,
+      {
+        lifecycleStatus: existingCase.lifecycleStatus,
+        closedAt: existingCase.closedAt,
+      },
+      {
+        lifecycleStatus: "REOPENED",
+        reopenReason: data.reopenReason,
+      },
+    );
+
+    return mapCase(updatedCase);
+  });
+};
+
 const updateCase = async (id, data, currentUser) => {
   const existingCase = mapCase(await caseRepository.findCaseById(id));
 
@@ -216,6 +454,7 @@ const updateCase = async (id, data, currentUser) => {
   }
 
   await assertCaseAccess(existingCase, currentUser);
+  assertCaseNotClosed(existingCase);
 
   const { caseManagerId, ...caseData } = data;
 
@@ -240,6 +479,14 @@ const updateCaseStatus = async (id, lifecycleStatus, currentUser) => {
   }
 
   await assertCaseAccess(existingCase, currentUser);
+  assertCaseNotClosed(existingCase);
+
+  if (lifecycleStatus === "CLOSED" || lifecycleStatus === "REOPENED") {
+    throw new ApiError(
+      400,
+      "Use the dedicated close or reopen endpoints for this action.",
+    );
+  }
 
   return mapCase(await caseRepository.updateCase(id, { lifecycleStatus }));
 };
@@ -250,6 +497,9 @@ module.exports = {
   getCaseById,
   updateCase,
   updateCaseStatus,
+  getClosureChecklist,
+  closeCase,
+  reopenCase,
   mapCase,
   generateCaseNumber,
   assertActiveCaseManager,

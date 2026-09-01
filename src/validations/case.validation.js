@@ -77,10 +77,21 @@ const updateCaseStatusSchema = Joi.object({
     .required(),
 });
 
+const closeCaseSchema = Joi.object({
+  closeDate: Joi.date().iso().required(),
+  closureSummary: Joi.string().trim().min(1).required(),
+});
+
+const reopenCaseSchema = Joi.object({
+  reopenReason: Joi.string().trim().min(1).required(),
+});
+
 module.exports = {
   createCaseSchema,
   getCasesSchema,
   caseIdSchema,
   updateCaseSchema,
   updateCaseStatusSchema,
+  closeCaseSchema,
+  reopenCaseSchema,
 };

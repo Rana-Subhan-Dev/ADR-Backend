@@ -20,6 +20,23 @@ const DEFAULT_PAGE = 1;
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 100;
 
+const CLOSURE_CHECKLIST_LABELS = [
+  "Outcome Notes Added",
+  "Final Hearing Completed",
+  "Required Documents Uploaded",
+  "Closure Eligibility Verified",
+  "Feedback Forms Completed",
+  "Accounting Audit Completed",
+];
+
+const CLOSURE_DERIVED_LABELS = new Set([
+  "Outcome Notes Added",
+  "Final Hearing Completed",
+  "Required Documents Uploaded",
+]);
+
+const CLOSABLE_STATUSES = new Set(["ACTIVE", "REOPENED"]);
+
 module.exports = {
   CaseType,
   CaseLifecycleStatus,
@@ -28,4 +45,7 @@ module.exports = {
   DEFAULT_PAGE,
   DEFAULT_LIMIT,
   MAX_LIMIT,
+  CLOSURE_CHECKLIST_LABELS,
+  CLOSURE_DERIVED_LABELS,
+  CLOSABLE_STATUSES,
 };
