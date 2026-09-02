@@ -171,15 +171,21 @@ const signIn = async (payload, requestMeta = {}) => {
     throw new ApiError(403, "Please accept your invitation before signing in.");
   }
 
-  if (
-    user.status === "LOCKED" &&
-    user.lockedUntil &&
-    user.lockedUntil > new Date()
-  ) {
-    throw new ApiError(
-      403,
-      `Account is locked. Please try again after ${user.lockedUntil.toISOString()}.`,
-    );
+  if (user.status === "LOCKED") {
+    const lockStillActive =
+      user.lockedUntil && user.lockedUntil > new Date();
+
+    if (lockStillActive) {
+      throw new ApiError(
+        403,
+        `Account is locked. Please try again after ${user.lockedUntil.toISOString()}.`,
+      );
+    }
+
+    await authRepository.unlockAccount(user.id);
+    user.status = "ACTIVE";
+    user.failedLoginAttempts = 0;
+    user.lockedUntil = null;
   }
 
   const isPasswordValid = await comparePassword(password, user.passwordHash);

@@ -1,7 +1,7 @@
 const { RoleName, UserType } = require("@prisma/client");
 
 const INVITABLE_ROLES = Object.values(RoleName).filter(
-  (role) => role !== RoleName.SUPER_ADMIN
+  (role) => role !== RoleName.SUPER_ADMIN,
 );
 
 const RESET_TOKEN_BYTES = 32;

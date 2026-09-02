@@ -136,10 +136,22 @@ const incrementFailedLoginAttempts = async (userId, { lockedUntil } = {}) => {
   });
 };
 
+const unlockAccount = async (userId) => {
+  return prisma.user.update({
+    where: { id: userId },
+    data: {
+      status: "ACTIVE",
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+    },
+  });
+};
+
 const resetFailedLoginAttempts = async (userId) => {
   return prisma.user.update({
     where: { id: userId },
     data: {
+      status: "ACTIVE",
       failedLoginAttempts: 0,
       lockedUntil: null,
       lastLoginAt: new Date(),
@@ -205,6 +217,7 @@ module.exports = {
   acceptInvitation,
   recordLoginAttempt,
   incrementFailedLoginAttempts,
+  unlockAccount,
   resetFailedLoginAttempts,
   createPasswordResetToken,
   findPasswordResetTokenByHash,
