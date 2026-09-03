@@ -6,6 +6,7 @@ const morgan = require("morgan");
 require("dotenv").config();
 
 const errorHandler = require("./middlewares/errorHandler.middleware");
+const rateLimiter = require("./middlewares/rateLimiter.middleware");
 const indexRoutes = require("./routes/index.routes");
 const app = express();
 
@@ -50,7 +51,7 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-app.use("/api/v1", indexRoutes);
+app.use("/api/v1", rateLimiter, indexRoutes);
 
 app.use(errorHandler);
 
