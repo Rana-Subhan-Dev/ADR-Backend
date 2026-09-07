@@ -2,7 +2,10 @@ const express = require("express");
 const documentController = require("../controllers/document.controller");
 const auth = require("../middlewares/auth.middleware");
 const validate = require("../middlewares/validate.middleware");
-const upload = require("../middlewares/upload.middleware");
+const {
+  uploadToS3,
+  cleanupUncommittedS3Uploads,
+} = require("../utils/s3Helper");
 const normalizeDocumentPayload = require("../middlewares/normalizeDocumentPayload.middleware");
 const { requirePermission } = require("../middlewares/permission.middleware");
 const {
@@ -27,7 +30,7 @@ router.post(
   "/",
   requirePermission(PermissionModule.DOCUMENTS, PermissionAction.CREATE),
   validate(caseIdSchema, "params"),
-  upload.single("file"),
+  uploadToS3.single("file"),
   normalizeDocumentPayload,
   validate(documentFileSchema),
   documentController.createDocument,
@@ -36,7 +39,7 @@ router.post(
   "/bulk",
   requirePermission(PermissionModule.DOCUMENTS, PermissionAction.CREATE),
   validate(caseIdSchema, "params"),
-  upload.array("files", 10),
+  uploadToS3.array("files", 10),
   normalizeDocumentPayload,
   validate(documentFileSchema),
   documentController.bulkUploadDocuments,
@@ -58,7 +61,7 @@ router.post(
   "/:documentId/versions",
   requirePermission(PermissionModule.DOCUMENTS, PermissionAction.CREATE),
   validate(documentIdSchema, "params"),
-  upload.single("file"),
+  uploadToS3.single("file"),
   validate(uploadVersionSchema),
   documentController.uploadNewVersion,
 );
@@ -96,5 +99,7 @@ router.get(
   validate(accessLogSchema, "query"),
   documentController.getDocumentAccessLogs,
 );
+
+router.use(cleanupUncommittedS3Uploads);
 
 module.exports = router;

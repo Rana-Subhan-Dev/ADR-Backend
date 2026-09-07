@@ -1,12 +1,26 @@
 const prisma = require("../config/prisma");
 const documentRepository = require("../repositories/document.repository");
 const caseService = require("./case.service");
-const storageProvider = require("../storage/storage.factory");
+const {
+  getSignedDownloadUrl,
+  deleteManyS3Objects,
+} = require("../utils/s3Helper");
 const ApiError = require("../utils/apiError");
 
 const managerRoles = ["SUPER_ADMIN", "ADMIN_LEADERSHIP", "CASE_MANAGER"];
 
 const isManager = (user) => managerRoles.includes(user.role?.name);
+
+const markS3Files = (files, state) => {
+  files.filter(Boolean).forEach((file) => {
+    file[state] = true;
+  });
+};
+
+const cleanupS3Files = async (files) => {
+  await deleteManyS3Objects(files);
+  markS3Files(files, "s3Cleaned");
+};
 
 const assertCanSetVisibility = (visibility, currentUser) => {
   if (!isManager(currentUser) && visibility !== "ALL_AUTHORIZED_PARTICIPANTS") {
@@ -149,12 +163,11 @@ const getAuthorizedDocument = async (
 };
 
 const uploadDocument = async (caseId, data, file, currentUser) => {
-  await caseService.getCaseById(caseId, currentUser);
-  assertCanSetVisibility(data.visibility, currentUser);
   if (!file) throw new ApiError(400, "A document file is required.");
-  const storedFile = await storageProvider.uploadFile(file);
   try {
-    return await prisma.$transaction(
+    await caseService.getCaseById(caseId, currentUser);
+    assertCanSetVisibility(data.visibility, currentUser);
+    const document = await prisma.$transaction(
       async (tx) => {
         await assertCategory(data.categoryId, tx);
         await assertRecipients(
@@ -196,7 +209,7 @@ const uploadDocument = async (caseId, data, file, currentUser) => {
           {
             documentId: document.id,
             versionNumber: 1,
-            fileKey: storedFile.key,
+            fileKey: file.key,
             fileSizeBytes: file.size,
             mimeType: file.mimetype,
             uploadedByUserId: currentUser.id,
@@ -228,8 +241,10 @@ const uploadDocument = async (caseId, data, file, currentUser) => {
       },
       { timeout: 15000 },
     );
+    markS3Files([file], "s3Committed");
+    return document;
   } catch (error) {
-    await storageProvider.deleteFile(storedFile.key).catch(() => undefined);
+    await cleanupS3Files([file]);
     throw error;
   }
 };
@@ -237,12 +252,10 @@ const uploadDocument = async (caseId, data, file, currentUser) => {
 const bulkUploadDocuments = async (caseId, data, files, currentUser) => {
   if (!files?.length)
     throw new ApiError(400, "At least one document file is required.");
-  const uploaded = [];
   try {
-    for (const file of files)
-      uploaded.push({ file, ...(await storageProvider.uploadFile(file)) });
     await caseService.getCaseById(caseId, currentUser);
-    return await prisma.$transaction(
+    assertCanSetVisibility(data.visibility, currentUser);
+    const documents = await prisma.$transaction(
       async (tx) => {
         await assertCategory(data.categoryId, tx);
         await assertRecipients(
@@ -252,11 +265,11 @@ const bulkUploadDocuments = async (caseId, data, files, currentUser) => {
           tx,
         );
         const documents = [];
-        for (const stored of uploaded) {
+        for (const file of files) {
           const document = await documentRepository.createDocument(
             {
               caseId,
-              name: stored.file.originalname,
+              name: file.originalname,
               description: data.description || null,
               categoryId: data.categoryId || null,
               visibility: data.visibility,
@@ -286,9 +299,9 @@ const bulkUploadDocuments = async (caseId, data, files, currentUser) => {
             {
               documentId: document.id,
               versionNumber: 1,
-              fileKey: stored.key,
-              fileSizeBytes: stored.file.size,
-              mimeType: stored.file.mimetype,
+              fileKey: file.key,
+              fileSizeBytes: file.size,
+              mimeType: file.mimetype,
               uploadedByUserId: currentUser.id,
               notifyParticipants: data.notifyParticipants,
             },
@@ -320,12 +333,10 @@ const bulkUploadDocuments = async (caseId, data, files, currentUser) => {
       },
       { timeout: 30000 },
     );
+    markS3Files(files, "s3Committed");
+    return documents;
   } catch (error) {
-    await Promise.all(
-      uploaded.map(({ key }) =>
-        storageProvider.deleteFile(key).catch(() => undefined),
-      ),
-    );
+    await cleanupS3Files(files);
     throw error;
   }
 };
@@ -421,9 +432,8 @@ const uploadNewVersion = async (
       "You do not have permission to upload a new version.",
     );
   if (!file) throw new ApiError(400, "A document file is required.");
-  const storedFile = await storageProvider.uploadFile(file);
   try {
-    return await prisma.$transaction(async (tx) => {
+    const updatedDocument = await prisma.$transaction(async (tx) => {
       const latest = await tx.documentVersion.aggregate({
         where: { documentId },
         _max: { versionNumber: true },
@@ -432,7 +442,7 @@ const uploadNewVersion = async (
         {
           documentId,
           versionNumber: (latest._max.versionNumber || 0) + 1,
-          fileKey: storedFile.key,
+          fileKey: file.key,
           fileSizeBytes: file.size,
           mimeType: file.mimetype,
           changesNotes: data.changesNotes || null,
@@ -467,8 +477,10 @@ const uploadNewVersion = async (
       );
       return updated;
     });
+    markS3Files([file], "s3Committed");
+    return updatedDocument;
   } catch (error) {
-    await storageProvider.deleteFile(storedFile.key).catch(() => undefined);
+    await cleanupS3Files([file]);
     throw error;
   }
 };
@@ -562,8 +574,10 @@ const downloadDocument = async (caseId, documentId, currentUser) => {
   const document = await getAuthorizedDocument(caseId, documentId, currentUser);
   if (!document.currentVersion)
     throw new ApiError(404, "Document version not found.");
-  const stream = await storageProvider.getReadStream(
+  const expiresIn = 300;
+  const downloadUrl = await getSignedDownloadUrl(
     document.currentVersion.fileKey,
+    expiresIn,
   );
   await prisma.documentAccessLog.create({
     data: {
@@ -573,9 +587,8 @@ const downloadDocument = async (caseId, documentId, currentUser) => {
     },
   });
   return {
-    stream,
-    name: document.name,
-    mimeType: document.currentVersion.mimeType,
+    downloadUrl,
+    expiresIn,
   };
 };
 

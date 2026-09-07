@@ -158,16 +158,21 @@ const getDocumentVersions = asyncHandler(async (req, res) =>
     ),
 );
 
-const downloadDocument = asyncHandler(async (req, res) => {
-  const file = await documentService.downloadDocument(
-    req.params.caseId,
-    req.params.documentId,
-    req.user,
-  );
-  res.type(file.mimeType || "application/octet-stream");
-  res.attachment(file.name);
-  file.stream.pipe(res);
-});
+const downloadDocument = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await documentService.downloadDocument(
+          req.params.caseId,
+          req.params.documentId,
+          req.user,
+        ),
+        "Document download URL generated successfully.",
+      ),
+    ),
+);
 
 const getDocumentAccessLogs = asyncHandler(async (req, res) =>
   res
