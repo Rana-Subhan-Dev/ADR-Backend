@@ -12,6 +12,7 @@ const documentRoutes = require("./document.routes");
 const timelineChecklistRoutes = require("./timelineChecklist.routes");
 const timesheetRoutes = require("./timesheet.routes");
 const docusignRoutes = require("./docusign.routes");
+const billingRoutes = require("./billing.routes");
 const express = require("express");
 const router = express.Router();
 
@@ -71,6 +72,10 @@ const defaultRoutes = [
   {
     path: "/cases/:caseId/docusign",
     route: docusignRoutes,
+  },
+  {
+    path: "/billing",
+    route: billingRoutes,
   },
 ];
 
