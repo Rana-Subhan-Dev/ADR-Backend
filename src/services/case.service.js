@@ -491,6 +491,26 @@ const updateCaseStatus = async (id, lifecycleStatus, currentUser) => {
   return mapCase(await caseRepository.updateCase(id, { lifecycleStatus }));
 };
 
+const buildCaseManagerScope = (currentUser) => {
+  if (hasGlobalCaseAccess(currentUser.role?.name)) {
+    return {};
+  }
+
+  if (currentUser.role?.name !== "CASE_MANAGER") {
+    return {};
+  }
+
+  return {
+    participants: {
+      some: {
+        userId: currentUser.id,
+        role: "CASE_MANAGER",
+        accessStatus: "ACTIVE",
+      },
+    },
+  };
+};
+
 module.exports = {
   createCase,
   getCases,
@@ -503,4 +523,6 @@ module.exports = {
   mapCase,
   generateCaseNumber,
   assertActiveCaseManager,
+  hasGlobalCaseAccess,
+  buildCaseManagerScope,
 };

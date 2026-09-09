@@ -24,6 +24,28 @@ const isAuthorizedForBilling = (user) => managerRoles.includes(user.role?.name);
 const canManageInvoicing = (user) =>
   billingAdminRoles.includes(user.role?.name);
 
+const applyCaseManagerCaseFilter = (where, currentUser, relationKey = "case") => {
+  const scope = caseService.buildCaseManagerScope(currentUser);
+  if (Object.keys(scope).length === 0) {
+    return where;
+  }
+
+  if (relationKey) {
+    return {
+      ...where,
+      [relationKey]: { ...(where[relationKey] || {}), ...scope },
+    };
+  }
+
+  return { ...where, ...scope };
+};
+
+const assertCaseAccessIfProvided = async (caseId, currentUser) => {
+  if (caseId) {
+    await caseService.getCaseById(caseId, currentUser);
+  }
+};
+
 const paginate = (items, total, page, limit, key) => ({
   [key]: items,
   pagination: {
@@ -114,14 +136,10 @@ const getBillingConfigurationsList = async (query, currentUser) => {
   const skip = (page - 1) * limit;
 
   const caseWhere = {};
-  if (currentUser.role?.name === "CASE_MANAGER") {
-    caseWhere.participants = {
-      some: {
-        userId: currentUser.id,
-        role: "CASE_MANAGER",
-        accessStatus: "ACTIVE",
-      },
-    };
+  const caseScopeConditions = [];
+  const cmScope = caseService.buildCaseManagerScope(currentUser);
+  if (Object.keys(cmScope).length > 0) {
+    caseScopeConditions.push(cmScope);
   }
 
   if (query.search) {
@@ -137,14 +155,21 @@ const getBillingConfigurationsList = async (query, currentUser) => {
     caseWhere.caseType = query.caseType;
   }
   if (query.neutralUserId) {
-    caseWhere.participants = {
-      ...caseWhere.participants,
-      some: {
-        userId: query.neutralUserId,
-        role: "NEUTRAL",
-        accessStatus: "ACTIVE",
+    caseScopeConditions.push({
+      participants: {
+        some: {
+          userId: query.neutralUserId,
+          role: "NEUTRAL",
+          accessStatus: "ACTIVE",
+        },
       },
-    };
+    });
+  }
+
+  if (caseScopeConditions.length === 1) {
+    Object.assign(caseWhere, caseScopeConditions[0]);
+  } else if (caseScopeConditions.length > 1) {
+    caseWhere.AND = caseScopeConditions;
   }
   if (query.payerPartyId) {
     caseWhere.parties = {
@@ -202,22 +227,13 @@ const getApprovedTimesheets = async (query, currentUser) => {
   const limit = Math.min(Number(query.limit) || 20, 100);
   const skip = (page - 1) * limit;
 
-  const where = {
+  let where = {
     approvalStatus: TimesheetApprovalStatus.APPROVED,
   };
 
-  if (currentUser.role?.name === "CASE_MANAGER") {
-    where.case = {
-      participants: {
-        some: {
-          userId: currentUser.id,
-          role: "CASE_MANAGER",
-          accessStatus: "ACTIVE",
-        },
-      },
-    };
-  }
+  where = applyCaseManagerCaseFilter(where, currentUser);
 
+  await assertCaseAccessIfProvided(query.caseId, currentUser);
   if (query.caseId) where.caseId = query.caseId;
   if (query.hearingId) where.hearingId = query.hearingId;
   if (query.neutralUserId) where.neutralUserId = query.neutralUserId;
@@ -823,18 +839,7 @@ const getInvoicesList = async (query, currentUser) => {
   const limit = Math.min(Number(query.limit) || 20, 100);
   const skip = (page - 1) * limit;
 
-  const where = {};
-  if (currentUser.role?.name === "CASE_MANAGER") {
-    where.case = {
-      participants: {
-        some: {
-          userId: currentUser.id,
-          role: "CASE_MANAGER",
-          accessStatus: "ACTIVE",
-        },
-      },
-    };
-  }
+  let where = applyCaseManagerCaseFilter({}, currentUser);
 
   if (query.search) {
     where.OR = [
@@ -844,6 +849,7 @@ const getInvoicesList = async (query, currentUser) => {
     ];
   }
 
+  await assertCaseAccessIfProvided(query.caseId, currentUser);
   if (query.caseId) where.caseId = query.caseId;
   if (query.invoiceStatus) where.invoiceStatus = query.invoiceStatus;
   if (query.paymentStatus) where.paymentStatus = query.paymentStatus;
@@ -1019,23 +1025,21 @@ const getPaymentTracking = async (query, currentUser) => {
   const limit = Math.min(Number(query.limit) || 20, 100);
   const skip = (page - 1) * limit;
 
+  const cmScope = caseService.buildCaseManagerScope(currentUser);
   const where = {};
-  if (currentUser.role?.name === "CASE_MANAGER") {
-    where.invoice = {
-      case: {
-        participants: {
-          some: {
-            userId: currentUser.id,
-            role: "CASE_MANAGER",
-            accessStatus: "ACTIVE",
-          },
-        },
-      },
-    };
+
+  if (Object.keys(cmScope).length > 0) {
+    where.invoice = { case: cmScope };
   }
 
-  if (query.caseId) where.invoice = { ...where.invoice, caseId: query.caseId };
-  if (query.invoiceId) where.invoiceId = query.invoiceId;
+  await assertCaseAccessIfProvided(query.caseId, currentUser);
+  if (query.caseId) {
+    where.invoice = { ...(where.invoice || {}), caseId: query.caseId };
+  }
+  if (query.invoiceId) {
+    await getInvoiceById(query.invoiceId, currentUser);
+    where.invoiceId = query.invoiceId;
+  }
   if (query.fromDate || query.toDate) {
     where.paymentDate = {
       ...(query.fromDate && { gte: new Date(query.fromDate) }),
@@ -1060,19 +1064,7 @@ const getPaymentTracking = async (query, currentUser) => {
         in: [InvoiceStatus.ISSUED, InvoiceStatus.SENT, InvoiceStatus.OVERDUE],
       },
       paymentStatus: { in: [PaymentStatus.UNPAID, PaymentStatus.PARTIAL] },
-      ...(currentUser.role?.name === "CASE_MANAGER"
-        ? {
-            case: {
-              participants: {
-                some: {
-                  userId: currentUser.id,
-                  role: "CASE_MANAGER",
-                  accessStatus: "ACTIVE",
-                },
-              },
-            },
-          }
-        : {}),
+      ...(Object.keys(cmScope).length > 0 ? { case: cmScope } : {}),
     },
     include: {
       payments: true,
@@ -1183,14 +1175,12 @@ const getQuickBooksSyncLogs = async (query, currentUser) => {
     );
   }
 
-  const {
-    page = 1,
-    limit = 20,
-    status,
-    relatedRecordType,
-    fromDate,
-    toDate,
-  } = query;
+  const { status, relatedRecordType, fromDate, toDate } = query;
+
+  const page = Number(query.page) || 1;
+  const limit = Math.min(Number(query.limit) || 20, 100);
+  const skip = (page - 1) * limit;
+
   const where = {
     integrationType: IntegrationType.QUICKBOOKS,
     ...(status && { status }),
@@ -1205,9 +1195,29 @@ const getQuickBooksSyncLogs = async (query, currentUser) => {
       : {}),
   };
 
+  const cmScope = caseService.buildCaseManagerScope(currentUser);
+  if (Object.keys(cmScope).length > 0) {
+    if (relatedRecordType && relatedRecordType !== "Invoice") {
+      return paginate([], 0, page, limit, "syncLogs");
+    }
+
+    const accessibleInvoices = await prisma.invoice.findMany({
+      where: { case: cmScope },
+      select: { id: true },
+    });
+    const invoiceIds = accessibleInvoices.map((invoice) => invoice.id);
+
+    if (invoiceIds.length === 0) {
+      return paginate([], 0, page, limit, "syncLogs");
+    }
+
+    where.relatedRecordType = "Invoice";
+    where.relatedRecordId = { in: invoiceIds };
+  }
+
   const { logs, total } = await billingRepository.findIntegrationSyncLogs({
     where,
-    skip: (page - 1) * limit,
+    skip,
     take: limit,
     orderBy: { createdAt: "desc" },
   });
