@@ -53,6 +53,13 @@ const PERMISSIONS = {
       PermissionAction.REVOKE,
     ],
     [PermissionModule.TIMESHEETS]: [PermissionAction.VIEW],
+    [PermissionModule.BILLING]: [
+      PermissionAction.VIEW,
+      PermissionAction.CREATE,
+      PermissionAction.EDIT,
+      PermissionAction.APPROVE,
+      PermissionAction.EXPORT,
+    ],
     [PermissionModule.DOCUSIGN]: [
       PermissionAction.VIEW,
       PermissionAction.CREATE,
@@ -72,6 +79,7 @@ const PERMISSIONS = {
       PermissionAction.CREATE,
       PermissionAction.EDIT,
     ],
+    [PermissionModule.BILLING]: [PermissionAction.VIEW],
     [PermissionModule.DOCUSIGN]: [PermissionAction.VIEW],
   },
   [RoleName.LAWYER]: {
@@ -82,6 +90,7 @@ const PERMISSIONS = {
       PermissionAction.VIEW,
       PermissionAction.CREATE,
     ],
+    [PermissionModule.BILLING]: [PermissionAction.VIEW],
     [PermissionModule.DOCUSIGN]: [PermissionAction.VIEW],
   },
   [RoleName.CLIENT]: {
@@ -92,6 +101,7 @@ const PERMISSIONS = {
       PermissionAction.VIEW,
       PermissionAction.CREATE,
     ],
+    [PermissionModule.BILLING]: [PermissionAction.VIEW],
     [PermissionModule.DOCUSIGN]: [PermissionAction.VIEW],
   },
   [RoleName.ACCOUNTING_STAFF]: {

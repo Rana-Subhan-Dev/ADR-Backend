@@ -18,35 +18,21 @@ router.use(auth);
 
 router.get(
   "/configurations",
-  requireInternalRole(
-    RoleName.SUPER_ADMIN,
-    RoleName.ADMIN_LEADERSHIP,
-    RoleName.ACCOUNTING_STAFF,
-    RoleName.CASE_MANAGER,
-  ),
+  requirePermission(PermissionModule.BILLING, PermissionAction.VIEW),
   validate(validation.listBillingConfigurationsSchema, "query"),
   controller.getBillingConfigurationsList,
 );
 
 router.get(
   "/cases/:caseId/configuration",
-  requireInternalRole(
-    RoleName.SUPER_ADMIN,
-    RoleName.ADMIN_LEADERSHIP,
-    RoleName.ACCOUNTING_STAFF,
-    RoleName.CASE_MANAGER,
-  ),
+  requirePermission(PermissionModule.BILLING, PermissionAction.VIEW),
   validate(validation.caseIdParamSchema, "params"),
   controller.getCaseBillingConfig,
 );
 
 router.put(
   "/cases/:caseId/configuration",
-  requireInternalRole(
-    RoleName.SUPER_ADMIN,
-    RoleName.ACCOUNTING_STAFF,
-    RoleName.CASE_MANAGER,
-  ),
+  requirePermission(PermissionModule.BILLING, PermissionAction.EDIT),
   validate(validation.caseIdParamSchema, "params"),
   validate(validation.caseBillingConfigSchema),
   controller.upsertCaseBillingConfig,
@@ -54,24 +40,14 @@ router.put(
 
 router.get(
   "/approved-timesheets",
-  requireInternalRole(
-    RoleName.SUPER_ADMIN,
-    RoleName.ADMIN_LEADERSHIP,
-    RoleName.ACCOUNTING_STAFF,
-    RoleName.CASE_MANAGER,
-  ),
+  requirePermission(PermissionModule.BILLING, PermissionAction.VIEW),
   validate(validation.listApprovedTimesheetsSchema, "query"),
   controller.getApprovedTimesheets,
 );
 
 router.get(
   "/invoices",
-  requireInternalRole(
-    RoleName.SUPER_ADMIN,
-    RoleName.ADMIN_LEADERSHIP,
-    RoleName.ACCOUNTING_STAFF,
-    RoleName.CASE_MANAGER,
-  ),
+  requirePermission(PermissionModule.BILLING, PermissionAction.VIEW),
   validate(validation.listInvoicesSchema, "query"),
   controller.getInvoicesList,
 );
@@ -85,12 +61,7 @@ router.post(
 
 router.get(
   "/invoices/:invoiceId",
-  requireInternalRole(
-    RoleName.SUPER_ADMIN,
-    RoleName.ADMIN_LEADERSHIP,
-    RoleName.ACCOUNTING_STAFF,
-    RoleName.CASE_MANAGER,
-  ),
+  requirePermission(PermissionModule.BILLING, PermissionAction.VIEW),
   validate(validation.invoiceIdParamSchema, "params"),
   controller.getInvoiceById,
 );
@@ -144,12 +115,7 @@ router.post(
 
 router.get(
   "/payments",
-  requireInternalRole(
-    RoleName.SUPER_ADMIN,
-    RoleName.ADMIN_LEADERSHIP,
-    RoleName.ACCOUNTING_STAFF,
-    RoleName.CASE_MANAGER,
-  ),
+  requirePermission(PermissionModule.BILLING, PermissionAction.VIEW),
   validate(validation.listPaymentsSchema, "query"),
   controller.getPaymentTracking,
 );
@@ -185,12 +151,18 @@ router.get(
     RoleName.ACCOUNTING_STAFF,
     RoleName.CASE_MANAGER,
   ),
+  requirePermission(PermissionModule.BILLING, PermissionAction.VIEW),
   validate(validation.listQuickBooksSyncLogsSchema, "query"),
   controller.getQuickBooksSyncLogs,
 );
 
 router.post(
   "/quickbooks/retry-sync",
+  requireInternalRole(
+    RoleName.SUPER_ADMIN,
+    RoleName.ACCOUNTING_STAFF,
+    RoleName.CASE_MANAGER,
+  ),
   requirePermission(PermissionModule.BILLING, PermissionAction.EDIT),
   validate(validation.retryQuickBooksSyncSchema),
   controller.retryQuickBooksSync,

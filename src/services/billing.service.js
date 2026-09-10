@@ -12,20 +12,71 @@ const {
   CaseTimelineEventType,
 } = require("@prisma/client");
 
-const managerRoles = [
+const allowedBillingRoles = [
   "SUPER_ADMIN",
   "ADMIN_LEADERSHIP",
   "ACCOUNTING_STAFF",
   "CASE_MANAGER",
+  "NEUTRAL",
+  "LAWYER",
+  "CLIENT",
 ];
-const billingAdminRoles = ["SUPER_ADMIN", "ACCOUNTING_STAFF"];
 
-const isAuthorizedForBilling = (user) => managerRoles.includes(user.role?.name);
-const canManageInvoicing = (user) =>
-  billingAdminRoles.includes(user.role?.name);
+const isAuthorizedForBilling = (user) =>
+  allowedBillingRoles.includes(user?.role?.name);
 
-const applyCaseManagerCaseFilter = (where, currentUser, relationKey = "case") => {
-  const scope = caseService.buildCaseManagerScope(currentUser);
+const buildBillingCaseScope = (currentUser) => {
+  const roleName = currentUser?.role?.name;
+  if (
+    ["SUPER_ADMIN", "ADMIN_LEADERSHIP", "ACCOUNTING_STAFF"].includes(roleName)
+  ) {
+    return {};
+  }
+  return {
+    participants: {
+      some: {
+        userId: currentUser.id,
+        role: roleName,
+        accessStatus: "ACTIVE",
+      },
+    },
+  };
+};
+
+const assertCanMutateCaseBilling = async (caseId, currentUser) => {
+  const roleName = currentUser?.role?.name;
+  if (["SUPER_ADMIN", "ACCOUNTING_STAFF"].includes(roleName)) {
+    return;
+  }
+  if (roleName === "CASE_MANAGER") {
+    if (!caseId) {
+      throw new ApiError(400, "Case ID is required.");
+    }
+    const participant = await prisma.caseParticipant.findFirst({
+      where: {
+        caseId,
+        userId: currentUser.id,
+        role: "CASE_MANAGER",
+        accessStatus: "ACTIVE",
+      },
+      select: { id: true },
+    });
+    if (!participant) {
+      throw new ApiError(
+        403,
+        "You do not have permission to manage billing for this case.",
+      );
+    }
+    return;
+  }
+  throw new ApiError(
+    403,
+    "You do not have permission to perform this billing action.",
+  );
+};
+
+const applyBillingCaseFilter = (where, currentUser, relationKey = "case") => {
+  const scope = buildBillingCaseScope(currentUser);
   if (Object.keys(scope).length === 0) {
     return where;
   }
@@ -77,6 +128,12 @@ const generateInvoiceNumber = async (tx = prisma) => {
 };
 
 const getCaseBillingConfig = async (caseId, currentUser) => {
+  if (!isAuthorizedForBilling(currentUser)) {
+    throw new ApiError(
+      403,
+      "You do not have permission to view billing configuration.",
+    );
+  }
   await caseService.getCaseById(caseId, currentUser);
   const config = await billingRepository.findBillingConfigByCaseId(caseId);
   return {
@@ -87,12 +144,7 @@ const getCaseBillingConfig = async (caseId, currentUser) => {
 };
 
 const upsertCaseBillingConfig = async (caseId, payload, currentUser) => {
-  if (!isAuthorizedForBilling(currentUser)) {
-    throw new ApiError(
-      403,
-      "You do not have permission to manage billing configuration.",
-    );
-  }
+  await assertCanMutateCaseBilling(caseId, currentUser);
   await caseService.getCaseById(caseId, currentUser);
 
   return prisma.$transaction(async (tx) => {
@@ -137,9 +189,9 @@ const getBillingConfigurationsList = async (query, currentUser) => {
 
   const caseWhere = {};
   const caseScopeConditions = [];
-  const cmScope = caseService.buildCaseManagerScope(currentUser);
-  if (Object.keys(cmScope).length > 0) {
-    caseScopeConditions.push(cmScope);
+  const caseScope = buildBillingCaseScope(currentUser);
+  if (Object.keys(caseScope).length > 0) {
+    caseScopeConditions.push(caseScope);
   }
 
   if (query.search) {
@@ -231,7 +283,10 @@ const getApprovedTimesheets = async (query, currentUser) => {
     approvalStatus: TimesheetApprovalStatus.APPROVED,
   };
 
-  where = applyCaseManagerCaseFilter(where, currentUser);
+  where = applyBillingCaseFilter(where, currentUser);
+  if (currentUser?.role?.name === "NEUTRAL") {
+    where.neutralUserId = currentUser.id;
+  }
 
   await assertCaseAccessIfProvided(query.caseId, currentUser);
   if (query.caseId) where.caseId = query.caseId;
@@ -308,12 +363,6 @@ const getApprovedTimesheets = async (query, currentUser) => {
 };
 
 const generateDraftInvoice = async (payload, currentUser) => {
-  if (!canManageInvoicing(currentUser)) {
-    throw new ApiError(
-      403,
-      "Only accounting staff or super admins can generate invoices.",
-    );
-  }
   const {
     caseId,
     invoiceType,
@@ -327,6 +376,7 @@ const generateDraftInvoice = async (payload, currentUser) => {
     splitPartySide,
   } = payload;
 
+  await assertCanMutateCaseBilling(caseId, currentUser);
   await caseService.getCaseById(caseId, currentUser);
 
   const billingConfig =
@@ -492,6 +542,12 @@ const generateDraftInvoice = async (payload, currentUser) => {
 };
 
 const getInvoiceById = async (invoiceId, currentUser) => {
+  if (!isAuthorizedForBilling(currentUser)) {
+    throw new ApiError(
+      403,
+      "You do not have permission to view invoice details.",
+    );
+  }
   const invoice = await billingRepository.findInvoiceById(invoiceId);
   if (!invoice) throw new ApiError(404, "Invoice not found.");
   await caseService.getCaseById(invoice.caseId, currentUser);
@@ -499,11 +555,9 @@ const getInvoiceById = async (invoiceId, currentUser) => {
 };
 
 const updateInvoice = async (invoiceId, payload, currentUser) => {
-  if (!canManageInvoicing(currentUser)) {
-    throw new ApiError(403, "You do not have permission to modify invoices.");
-  }
   const existing = await billingRepository.findInvoiceById(invoiceId);
   if (!existing) throw new ApiError(404, "Invoice not found.");
+  await assertCanMutateCaseBilling(existing.caseId, currentUser);
   if (existing.invoiceStatus !== InvoiceStatus.DRAFT) {
     throw new ApiError(400, "Only draft invoices can be edited.");
   }
@@ -573,14 +627,9 @@ const updateInvoice = async (invoiceId, payload, currentUser) => {
 };
 
 const submitInvoiceForReview = async (invoiceId, payload, currentUser) => {
-  if (!isAuthorizedForBilling(currentUser)) {
-    throw new ApiError(
-      403,
-      "You do not have permission to submit invoices for review.",
-    );
-  }
   const existing = await billingRepository.findInvoiceById(invoiceId);
   if (!existing) throw new ApiError(404, "Invoice not found.");
+  await assertCanMutateCaseBilling(existing.caseId, currentUser);
   if (existing.invoiceStatus !== InvoiceStatus.DRAFT) {
     throw new ApiError(400, "Only draft invoices can be submitted for review.");
   }
@@ -628,11 +677,9 @@ const submitInvoiceForReview = async (invoiceId, payload, currentUser) => {
 };
 
 const finalizeInvoice = async (invoiceId, currentUser) => {
-  if (!canManageInvoicing(currentUser)) {
-    throw new ApiError(403, "You do not have permission to finalize invoices.");
-  }
   const existing = await billingRepository.findInvoiceById(invoiceId);
   if (!existing) throw new ApiError(404, "Invoice not found.");
+  await assertCanMutateCaseBilling(existing.caseId, currentUser);
   if (existing.invoiceStatus !== InvoiceStatus.DRAFT) {
     throw new ApiError(400, "Invoice is not in draft status.");
   }
@@ -675,11 +722,9 @@ const finalizeInvoice = async (invoiceId, currentUser) => {
 };
 
 const sendInvoice = async (invoiceId, payload, currentUser) => {
-  if (!canManageInvoicing(currentUser)) {
-    throw new ApiError(403, "You do not have permission to send invoices.");
-  }
   const invoice = await billingRepository.findInvoiceById(invoiceId);
   if (!invoice) throw new ApiError(404, "Invoice not found.");
+  await assertCanMutateCaseBilling(invoice.caseId, currentUser);
   if (
     ![InvoiceStatus.ISSUED, InvoiceStatus.SENT, InvoiceStatus.OVERDUE].includes(
       invoice.invoiceStatus,
@@ -731,11 +776,9 @@ const sendInvoice = async (invoiceId, payload, currentUser) => {
 };
 
 const voidInvoice = async (invoiceId, reason, currentUser) => {
-  if (!canManageInvoicing(currentUser)) {
-    throw new ApiError(403, "You do not have permission to void invoices.");
-  }
   const existing = await billingRepository.findInvoiceById(invoiceId);
   if (!existing) throw new ApiError(404, "Invoice not found.");
+  await assertCanMutateCaseBilling(existing.caseId, currentUser);
   if (existing.invoiceStatus === InvoiceStatus.VOID) {
     throw new ApiError(400, "Invoice is already void.");
   }
@@ -771,11 +814,9 @@ const voidInvoice = async (invoiceId, reason, currentUser) => {
 };
 
 const reissueInvoice = async (invoiceId, payload, currentUser) => {
-  if (!canManageInvoicing(currentUser)) {
-    throw new ApiError(403, "You do not have permission to reissue invoices.");
-  }
   const existing = await billingRepository.findInvoiceById(invoiceId);
   if (!existing) throw new ApiError(404, "Invoice not found.");
+  await assertCanMutateCaseBilling(existing.caseId, currentUser);
   if (existing.invoiceStatus !== InvoiceStatus.VOID) {
     throw new ApiError(400, "Only void invoices can be reissued.");
   }
@@ -839,7 +880,7 @@ const getInvoicesList = async (query, currentUser) => {
   const limit = Math.min(Number(query.limit) || 20, 100);
   const skip = (page - 1) * limit;
 
-  let where = applyCaseManagerCaseFilter({}, currentUser);
+  let where = applyBillingCaseFilter({}, currentUser);
 
   if (query.search) {
     where.OR = [
@@ -878,11 +919,9 @@ const getInvoicesList = async (query, currentUser) => {
 };
 
 const recordPayment = async (invoiceId, payload, currentUser) => {
-  if (!canManageInvoicing(currentUser)) {
-    throw new ApiError(403, "You do not have permission to record payments.");
-  }
   const invoice = await billingRepository.findInvoiceById(invoiceId);
   if (!invoice) throw new ApiError(404, "Invoice not found.");
+  await assertCanMutateCaseBilling(invoice.caseId, currentUser);
   if (invoice.invoiceStatus === InvoiceStatus.VOID) {
     throw new ApiError(400, "Cannot record payment on a void invoice.");
   }
@@ -949,14 +988,9 @@ const recordPayment = async (invoiceId, payload, currentUser) => {
 };
 
 const recordCreditNote = async (invoiceId, payload, currentUser) => {
-  if (!canManageInvoicing(currentUser)) {
-    throw new ApiError(
-      403,
-      "You do not have permission to issue credit notes.",
-    );
-  }
   const invoice = await billingRepository.findInvoiceById(invoiceId);
   if (!invoice) throw new ApiError(404, "Invoice not found.");
+  await assertCanMutateCaseBilling(invoice.caseId, currentUser);
   if (invoice.invoiceStatus === InvoiceStatus.VOID) {
     throw new ApiError(400, "Cannot record credit note on a void invoice.");
   }
@@ -1025,11 +1059,11 @@ const getPaymentTracking = async (query, currentUser) => {
   const limit = Math.min(Number(query.limit) || 20, 100);
   const skip = (page - 1) * limit;
 
-  const cmScope = caseService.buildCaseManagerScope(currentUser);
+  const caseScope = buildBillingCaseScope(currentUser);
   const where = {};
 
-  if (Object.keys(cmScope).length > 0) {
-    where.invoice = { case: cmScope };
+  if (Object.keys(caseScope).length > 0) {
+    where.invoice = { case: caseScope };
   }
 
   await assertCaseAccessIfProvided(query.caseId, currentUser);
@@ -1064,7 +1098,7 @@ const getPaymentTracking = async (query, currentUser) => {
         in: [InvoiceStatus.ISSUED, InvoiceStatus.SENT, InvoiceStatus.OVERDUE],
       },
       paymentStatus: { in: [PaymentStatus.UNPAID, PaymentStatus.PARTIAL] },
-      ...(Object.keys(cmScope).length > 0 ? { case: cmScope } : {}),
+      ...(Object.keys(caseScope).length > 0 ? { case: caseScope } : {}),
     },
     include: {
       payments: true,
@@ -1119,14 +1153,9 @@ const getPaymentTracking = async (query, currentUser) => {
 };
 
 const syncInvoiceToQuickBooks = async (invoiceId, currentUser) => {
-  if (!canManageInvoicing(currentUser)) {
-    throw new ApiError(
-      403,
-      "You do not have permission to trigger QuickBooks sync.",
-    );
-  }
   const invoice = await billingRepository.findInvoiceById(invoiceId);
   if (!invoice) throw new ApiError(404, "Invoice not found.");
+  await assertCanMutateCaseBilling(invoice.caseId, currentUser);
 
   return prisma.$transaction(async (tx) => {
     const updated = await tx.invoice.update({
@@ -1195,14 +1224,14 @@ const getQuickBooksSyncLogs = async (query, currentUser) => {
       : {}),
   };
 
-  const cmScope = caseService.buildCaseManagerScope(currentUser);
-  if (Object.keys(cmScope).length > 0) {
+  const caseScope = buildBillingCaseScope(currentUser);
+  if (Object.keys(caseScope).length > 0) {
     if (relatedRecordType && relatedRecordType !== "Invoice") {
       return paginate([], 0, page, limit, "syncLogs");
     }
 
     const accessibleInvoices = await prisma.invoice.findMany({
-      where: { case: cmScope },
+      where: { case: caseScope },
       select: { id: true },
     });
     const invoiceIds = accessibleInvoices.map((invoice) => invoice.id);
@@ -1226,7 +1255,10 @@ const getQuickBooksSyncLogs = async (query, currentUser) => {
 };
 
 const retryQuickBooksSync = async (data, currentUser) => {
-  if (!canManageInvoicing(currentUser)) {
+  const roleName = currentUser?.role?.name;
+  if (
+    !["SUPER_ADMIN", "ACCOUNTING_STAFF", "CASE_MANAGER"].includes(roleName)
+  ) {
     throw new ApiError(
       403,
       "You are not authorized to retry QuickBooks sync tasks.",
@@ -1238,6 +1270,21 @@ const retryQuickBooksSync = async (data, currentUser) => {
   );
   if (logs.length === 0) {
     throw new ApiError(404, "No matching sync logs found.");
+  }
+
+  if (roleName === "CASE_MANAGER") {
+    const invoiceIds = logs
+      .filter((l) => l.relatedRecordType === "Invoice")
+      .map((l) => l.relatedRecordId);
+    if (invoiceIds.length > 0) {
+      const invoices = await prisma.invoice.findMany({
+        where: { id: { in: invoiceIds } },
+        select: { caseId: true },
+      });
+      for (const inv of invoices) {
+        await assertCanMutateCaseBilling(inv.caseId, currentUser);
+      }
+    }
   }
 
   const results = [];
@@ -1270,13 +1317,7 @@ const retryQuickBooksSync = async (data, currentUser) => {
 };
 
 const generateNeutralPaymentStatement = async (caseId, data, currentUser) => {
-  if (!isAuthorizedForBilling(currentUser)) {
-    throw new ApiError(
-      403,
-      "You are not authorized to create neutral payment statements.",
-    );
-  }
-
+  await assertCanMutateCaseBilling(caseId, currentUser);
   await caseService.getCaseById(caseId, currentUser);
   const timesheets = await billingRepository.findTimesheetsByIds(
     data.timesheetIds,
