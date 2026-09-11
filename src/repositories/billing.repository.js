@@ -1,22 +1,79 @@
 const prisma = require("../config/prisma");
 
-const billingConfigSelect = {
+const partyContactSelect = {
+  id: true,
+  side: true,
+  partyType: true,
+  firstName: true,
+  lastName: true,
+  organizationName: true,
+  email: true,
+};
+
+const billingConfigScalarSelect = {
   id: true,
   caseId: true,
   billingType: true,
+  billingInputSource: true,
+  billingMode: true,
   neutralHourlyRate: true,
+  neutralDailyRate: true,
   caseManagementHourlyRate: true,
   flatFeeAmount: true,
-  claimantSplitPercentage: true,
-  respondentSplitPercentage: true,
+  includedHearingDays: true,
+  includedPrePostHearingHours: true,
+  overageHourlyRate: true,
+  additionalDayRate: true,
+  customRate: true,
+  customRateDescription: true,
+  expensesPolicy: true,
+  travelTimeRateType: true,
+  travelTimeCustomHourlyRate: true,
+  splitBillingEnabled: true,
+  roundingResidualCasePartyId: true,
   taxApplicability: true,
   deliveryContactEmail: true,
   billingNotes: true,
+  accountingAuditComplete: true,
+  fedArbFeeScheduleType: true,
   setupFee: true,
   administrationFee: true,
+  adminFeePercentage: true,
+  agreementFeePercentage: true,
   hasTrustAccount: true,
   createdAt: true,
   updatedAt: true,
+};
+
+const billingConfigSelect = {
+  ...billingConfigScalarSelect,
+  roundingResidualCaseParty: {
+    select: partyContactSelect,
+  },
+  payerSplits: {
+    select: {
+      id: true,
+      casePartyId: true,
+      invoiceContactEmail: true,
+      invoiceContactName: true,
+      splitPercentage: true,
+      caseParty: {
+        select: partyContactSelect,
+      },
+    },
+    orderBy: { createdAt: "asc" },
+  },
+  additionalTimekeepers: {
+    select: {
+      id: true,
+      role: true,
+      hourlyRate: true,
+      expensesAllowed: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+    orderBy: { createdAt: "asc" },
+  },
   case: {
     select: {
       id: true,
@@ -25,15 +82,7 @@ const billingConfigSelect = {
       caseType: true,
       lifecycleStatus: true,
       parties: {
-        select: {
-          id: true,
-          side: true,
-          partyType: true,
-          firstName: true,
-          lastName: true,
-          organizationName: true,
-          email: true,
-        },
+        select: partyContactSelect,
       },
       participants: {
         where: { role: "NEUTRAL", accessStatus: "ACTIVE" },
@@ -152,13 +201,56 @@ const findBillingConfigByCaseId = (caseId, tx = prisma) =>
     select: billingConfigSelect,
   });
 
-const upsertBillingConfig = (caseId, data, tx = prisma) =>
-  tx.billingConfiguration.upsert({
+const upsertBillingConfig = async (
+  caseId,
+  { scalarData, payerSplits, additionalTimekeepers },
+  tx = prisma,
+) => {
+  const saved = await tx.billingConfiguration.upsert({
     where: { caseId },
-    update: data,
-    create: { caseId, ...data },
+    update: scalarData,
+    create: { caseId, ...scalarData },
+    select: { id: true },
+  });
+
+  if (payerSplits !== undefined) {
+    await tx.billingPayerSplit.deleteMany({
+      where: { billingConfigurationId: saved.id },
+    });
+    if (payerSplits.length > 0) {
+      await tx.billingPayerSplit.createMany({
+        data: payerSplits.map((row) => ({
+          billingConfigurationId: saved.id,
+          casePartyId: row.casePartyId,
+          invoiceContactEmail: row.invoiceContactEmail || null,
+          invoiceContactName: row.invoiceContactName || null,
+          splitPercentage: row.splitPercentage,
+        })),
+      });
+    }
+  }
+
+  if (additionalTimekeepers !== undefined) {
+    await tx.billingAdditionalTimekeeper.deleteMany({
+      where: { billingConfigurationId: saved.id },
+    });
+    if (additionalTimekeepers.length > 0) {
+      await tx.billingAdditionalTimekeeper.createMany({
+        data: additionalTimekeepers.map((row) => ({
+          billingConfigurationId: saved.id,
+          role: row.role,
+          hourlyRate: row.hourlyRate,
+          expensesAllowed: row.expensesAllowed || "NOT_ALLOWED",
+        })),
+      });
+    }
+  }
+
+  return tx.billingConfiguration.findUnique({
+    where: { id: saved.id },
     select: billingConfigSelect,
   });
+};
 
 const getBillingConfigurations = async ({ where, skip, take, orderBy }) => {
   const [items, total] = await prisma.$transaction([
@@ -191,33 +283,30 @@ const getCasesWithOrWithoutBilling = async ({ where, skip, take, orderBy }) => {
         updatedAt: true,
         billingConfiguration: {
           select: {
-            id: true,
-            billingType: true,
-            neutralHourlyRate: true,
-            caseManagementHourlyRate: true,
-            flatFeeAmount: true,
-            claimantSplitPercentage: true,
-            respondentSplitPercentage: true,
-            taxApplicability: true,
-            deliveryContactEmail: true,
-            billingNotes: true,
-            setupFee: true,
-            administrationFee: true,
-            hasTrustAccount: true,
-            createdAt: true,
-            updatedAt: true,
+            ...billingConfigScalarSelect,
+            payerSplits: {
+              select: {
+                id: true,
+                casePartyId: true,
+                invoiceContactEmail: true,
+                invoiceContactName: true,
+                splitPercentage: true,
+              },
+              orderBy: { createdAt: "asc" },
+            },
+            additionalTimekeepers: {
+              select: {
+                id: true,
+                role: true,
+                hourlyRate: true,
+                expensesAllowed: true,
+              },
+              orderBy: { createdAt: "asc" },
+            },
           },
         },
         parties: {
-          select: {
-            id: true,
-            side: true,
-            partyType: true,
-            firstName: true,
-            lastName: true,
-            organizationName: true,
-            email: true,
-          },
+          select: partyContactSelect,
         },
         participants: {
           where: { role: "NEUTRAL", accessStatus: "ACTIVE" },
@@ -278,10 +367,13 @@ const findApprovedTimesheets = async ({ where, skip, take, orderBy }) => {
               select: {
                 id: true,
                 billingType: true,
+                billingInputSource: true,
                 neutralHourlyRate: true,
+                overageHourlyRate: true,
                 caseManagementHourlyRate: true,
-                claimantSplitPercentage: true,
-                respondentSplitPercentage: true,
+                adminFeePercentage: true,
+                agreementFeePercentage: true,
+                splitBillingEnabled: true,
               },
             },
           },
@@ -475,6 +567,7 @@ const updateIntegrationSyncLog = (id, data, tx = prisma) =>
 
 module.exports = {
   billingConfigSelect,
+  billingConfigScalarSelect,
   invoiceSelect,
   findBillingConfigByCaseId,
   upsertBillingConfig,

@@ -30,6 +30,8 @@ model CaseParty {
   caseParticipants   CaseParticipant[]
   payerInvoices      Invoice[]
   docuSignRecipients DocuSignRecipient[]
+  billingPayerSplits BillingPayerSplit[]
+  residualForBillingConfigs BillingConfiguration[] @relation("BillingRoundingResidualPayer")
 
   createdAt DateTime @default(now()) @db.Timestamp(3)
   updatedAt DateTime @updatedAt @db.Timestamp(3)

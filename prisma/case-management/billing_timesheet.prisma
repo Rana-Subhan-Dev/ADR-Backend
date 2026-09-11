@@ -37,25 +37,86 @@ model BillingConfiguration {
   caseId String @unique
   case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
-  billingType BillingType
+  billingType        BillingType
+  billingInputSource BillingInputSource @default(FIRM_INVOICE)
+  billingMode        BillingMode        @default(DEPOSIT_BASED)
 
-  neutralHourlyRate        Decimal? @db.Decimal(10, 2)
-  caseManagementHourlyRate Decimal? @db.Decimal(10, 2)
-  flatFeeAmount            Decimal? @db.Decimal(12, 2)
+  // Neutral fee schedule
+  neutralHourlyRate            Decimal? @db.Decimal(10, 2)
+  neutralDailyRate             Decimal? @db.Decimal(10, 2)
+  caseManagementHourlyRate     Decimal? @db.Decimal(10, 2)
+  flatFeeAmount                Decimal? @db.Decimal(12, 2)
+  includedHearingDays          Int?
+  includedPrePostHearingHours  Decimal? @db.Decimal(6, 2)
+  overageHourlyRate            Decimal? @db.Decimal(10, 2)
+  additionalDayRate            Decimal? @db.Decimal(10, 2)
+  customRate                   Decimal? @db.Decimal(12, 2)
+  customRateDescription        String?
+  expensesPolicy               BillingExpensesPolicy?
+  travelTimeRateType           TravelTimeRateType     @default(FREE)
+  travelTimeCustomHourlyRate   Decimal?               @db.Decimal(10, 2)
 
-  claimantSplitPercentage   Decimal? @db.Decimal(5, 2)
-  respondentSplitPercentage Decimal? @db.Decimal(5, 2)
+  splitBillingEnabled          Boolean @default(false)
+  roundingResidualCasePartyId  String?
+  roundingResidualCaseParty    CaseParty? @relation("BillingRoundingResidualPayer", fields: [roundingResidualCasePartyId], references: [id], onDelete: SetNull)
 
   taxApplicability     Boolean @default(false)
   deliveryContactEmail String?
   billingNotes         String? @db.Text
+  accountingAuditComplete Boolean @default(false)
 
-  setupFee          Decimal? @db.Decimal(12, 2)
-  administrationFee Decimal? @db.Decimal(12, 2)
-  hasTrustAccount   Boolean  @default(false)
+  // FedArb fee schedule
+  fedArbFeeScheduleType  CaseType?
+  setupFee               Decimal? @db.Decimal(12, 2)
+  administrationFee      Decimal? @db.Decimal(12, 2)
+  adminFeePercentage     Decimal? @db.Decimal(5, 2)
+  agreementFeePercentage Decimal? @db.Decimal(5, 2)
+  hasTrustAccount        Boolean  @default(false)
+
+  payerSplits            BillingPayerSplit[]
+  additionalTimekeepers  BillingAdditionalTimekeeper[]
 
   createdAt DateTime @default(now()) @db.Timestamp(3)
   updatedAt DateTime @updatedAt @db.Timestamp(3)
 
+  @@index([roundingResidualCasePartyId])
   @@map("billing_configurations")
+}
+
+model BillingPayerSplit {
+  id String @id @default(uuid())
+
+  billingConfigurationId String
+  billingConfiguration   BillingConfiguration @relation(fields: [billingConfigurationId], references: [id], onDelete: Cascade)
+
+  casePartyId String
+  caseParty   CaseParty @relation(fields: [casePartyId], references: [id], onDelete: Cascade)
+
+  invoiceContactEmail String?
+  invoiceContactName  String?
+  splitPercentage     Decimal @db.Decimal(5, 2)
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@unique([billingConfigurationId, casePartyId])
+  @@index([casePartyId])
+  @@map("billing_payer_splits")
+}
+
+model BillingAdditionalTimekeeper {
+  id String @id @default(uuid())
+
+  billingConfigurationId String
+  billingConfiguration   BillingConfiguration @relation(fields: [billingConfigurationId], references: [id], onDelete: Cascade)
+
+  role            String
+  hourlyRate      Decimal                @db.Decimal(10, 2)
+  expensesAllowed BillingExpensesPolicy  @default(NOT_ALLOWED)
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([billingConfigurationId])
+  @@map("billing_additional_timekeepers")
 }

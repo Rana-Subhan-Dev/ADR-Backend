@@ -245,6 +245,29 @@ enum BillingType {
   HYBRID
 }
 
+enum BillingInputSource {
+  FIRM_INVOICE
+  PLATFORM_TIMESHEETS
+}
+
+enum BillingMode {
+  DEPOSIT_BASED
+  STANDARD
+  MILESTONE
+}
+
+enum TravelTimeRateType {
+  FREE
+  CUSTOM_HOURLY
+  FULL_HOURLY
+}
+
+enum BillingExpensesPolicy {
+  NOT_ALLOWED
+  ALLOWED
+  BILLABLE_AS_INCURRED
+}
+
 enum InvoiceType {
   DEPOSIT
   STANDARD

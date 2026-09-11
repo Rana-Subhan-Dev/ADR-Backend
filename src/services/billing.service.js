@@ -3,6 +3,7 @@ const billingRepository = require("../repositories/billing.repository");
 const caseService = require("./case.service");
 const ApiError = require("../utils/apiError");
 const { sendEmail } = require("../utils/sendEmail");
+const { PRE_POST_ACTIVITY_TYPES } = require("../constants/billing.constants");
 const {
   InvoiceStatus,
   PaymentStatus,
@@ -10,6 +11,7 @@ const {
   IntegrationSyncStatus,
   IntegrationType,
   CaseTimelineEventType,
+  BillingInputSource,
 } = require("@prisma/client");
 
 const allowedBillingRoles = [
@@ -21,6 +23,42 @@ const allowedBillingRoles = [
   "LAWYER",
   "CLIENT",
 ];
+
+const BILLING_CONFIG_SCALAR_KEYS = [
+  "billingType",
+  "billingInputSource",
+  "billingMode",
+  "neutralHourlyRate",
+  "neutralDailyRate",
+  "caseManagementHourlyRate",
+  "flatFeeAmount",
+  "includedHearingDays",
+  "includedPrePostHearingHours",
+  "overageHourlyRate",
+  "additionalDayRate",
+  "customRate",
+  "customRateDescription",
+  "expensesPolicy",
+  "travelTimeRateType",
+  "travelTimeCustomHourlyRate",
+  "splitBillingEnabled",
+  "roundingResidualCasePartyId",
+  "taxApplicability",
+  "deliveryContactEmail",
+  "billingNotes",
+  "accountingAuditComplete",
+  "fedArbFeeScheduleType",
+  "setupFee",
+  "administrationFee",
+  "adminFeePercentage",
+  "agreementFeePercentage",
+  "hasTrustAccount",
+];
+
+const roundMoney = (value) => Math.round(Number(value) * 100) / 100;
+
+const emptyToNull = (value) =>
+  value === undefined || value === "" ? null : value;
 
 const isAuthorizedForBilling = (user) =>
   allowedBillingRoles.includes(user?.role?.name);
@@ -143,17 +181,114 @@ const getCaseBillingConfig = async (caseId, currentUser) => {
   };
 };
 
+const validatePayerSplitsForCase = async (caseId, payload) => {
+  const {
+    splitBillingEnabled,
+    payerSplits,
+    roundingResidualCasePartyId,
+  } = payload;
+
+  if (!splitBillingEnabled && payerSplits === undefined) {
+    return;
+  }
+
+  const splits = payerSplits || [];
+  if (splitBillingEnabled && splits.length === 0) {
+    throw new ApiError(
+      400,
+      "At least one payer split is required when split billing is enabled.",
+    );
+  }
+
+  if (splits.length === 0) {
+    return;
+  }
+
+  const partyIds = [...new Set(splits.map((row) => row.casePartyId))];
+  if (partyIds.length !== splits.length) {
+    throw new ApiError(400, "Duplicate payers are not allowed in split billing.");
+  }
+
+  const parties = await prisma.caseParty.findMany({
+    where: { caseId, id: { in: partyIds } },
+    select: { id: true },
+  });
+  if (parties.length !== partyIds.length) {
+    throw new ApiError(400, "One or more payer parties do not belong to this case.");
+  }
+
+  if (
+    roundingResidualCasePartyId &&
+    !partyIds.includes(roundingResidualCasePartyId)
+  ) {
+    throw new ApiError(
+      400,
+      "Rounding residual payer must be one of the configured payer splits.",
+    );
+  }
+};
+
 const upsertCaseBillingConfig = async (caseId, payload, currentUser) => {
   await assertCanMutateCaseBilling(caseId, currentUser);
   await caseService.getCaseById(caseId, currentUser);
 
+  await validatePayerSplitsForCase(caseId, payload);
+  const {
+    payerSplits,
+    additionalTimekeepers,
+    ...rest
+  } = payload;
+
+  const scalarData = {};
+  for (const key of BILLING_CONFIG_SCALAR_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(rest, key)) {
+      scalarData[key] =
+        key === "deliveryContactEmail" ||
+        key === "billingNotes" ||
+        key === "customRateDescription"
+          ? emptyToNull(rest[key])
+          : rest[key];
+    }
+  }
+
+  if (
+    scalarData.splitBillingEnabled === false &&
+    scalarData.roundingResidualCasePartyId === undefined
+  ) {
+    scalarData.roundingResidualCasePartyId = null;
+  }
+
+  const normalizedPayerSplits =
+    payerSplits === undefined
+      ? undefined
+      : payerSplits.map((row) => ({
+          casePartyId: row.casePartyId,
+          invoiceContactEmail: emptyToNull(row.invoiceContactEmail),
+          invoiceContactName: emptyToNull(row.invoiceContactName),
+          splitPercentage: row.splitPercentage,
+        }));
+
+  const normalizedTimekeepers =
+    additionalTimekeepers === undefined
+      ? undefined
+      : additionalTimekeepers.map((row) => ({
+          role: row.role,
+          hourlyRate: row.hourlyRate,
+          expensesAllowed: row.expensesAllowed || "NOT_ALLOWED",
+        }));
+
   return prisma.$transaction(async (tx) => {
     const previous = await tx.billingConfiguration.findUnique({
       where: { caseId },
+      select: billingRepository.billingConfigSelect,
     });
     const saved = await billingRepository.upsertBillingConfig(
       caseId,
-      payload,
+      {
+        scalarData,
+        payerSplits: normalizedPayerSplits,
+        additionalTimekeepers: normalizedTimekeepers,
+      },
       tx,
     );
 
@@ -229,6 +364,7 @@ const getBillingConfigurationsList = async (query, currentUser) => {
     };
   }
 
+  const billingConfigurationFilter = {};
   if (query.status === "CONFIGURED") {
     caseWhere.billingConfiguration = { isNot: null };
   } else if (query.status === "INCOMPLETE") {
@@ -236,10 +372,29 @@ const getBillingConfigurationsList = async (query, currentUser) => {
   }
 
   if (query.billingType) {
-    caseWhere.billingConfiguration = {
-      ...(caseWhere.billingConfiguration || {}),
-      billingType: query.billingType,
-    };
+    billingConfigurationFilter.billingType = query.billingType;
+  }
+  if (query.billingInputSource) {
+    billingConfigurationFilter.billingInputSource = query.billingInputSource;
+  }
+  if (query.billingMode) {
+    billingConfigurationFilter.billingMode = query.billingMode;
+  }
+
+  if (Object.keys(billingConfigurationFilter).length > 0) {
+    if (query.status === "INCOMPLETE") {
+      // INCOMPLETE means no config; type/source filters cannot apply.
+      caseWhere.billingConfiguration = null;
+    } else {
+      caseWhere.billingConfiguration = {
+        ...(typeof caseWhere.billingConfiguration === "object" &&
+        caseWhere.billingConfiguration &&
+        !("isNot" in caseWhere.billingConfiguration)
+          ? caseWhere.billingConfiguration
+          : {}),
+        ...billingConfigurationFilter,
+      };
+    }
   }
 
   const { cases, total } = await billingRepository.getCasesWithOrWithoutBilling(
@@ -362,6 +517,34 @@ const getApprovedTimesheets = async (query, currentUser) => {
   return paginate(formatted, total, page, limit, "timesheets");
 };
 
+const resolveTimesheetRate = (activityType, billingConfig, trackedHoursByBucket) => {
+  const neutralRate = billingConfig?.neutralHourlyRate
+    ? Number(billingConfig.neutralHourlyRate)
+    : 0;
+  const cmRate = billingConfig?.caseManagementHourlyRate
+    ? Number(billingConfig.caseManagementHourlyRate)
+    : 0;
+  const overageRate = billingConfig?.overageHourlyRate
+    ? Number(billingConfig.overageHourlyRate)
+    : neutralRate;
+  const includedPrePost = billingConfig?.includedPrePostHearingHours
+    ? Number(billingConfig.includedPrePostHearingHours)
+    : null;
+
+  if (activityType === "CASE_MANAGEMENT") {
+    return cmRate || neutralRate;
+  }
+
+  if (PRE_POST_ACTIVITY_TYPES.has(activityType) && includedPrePost !== null) {
+    const used = trackedHoursByBucket.prePost || 0;
+    if (used >= includedPrePost) {
+      return overageRate || neutralRate;
+    }
+  }
+
+  return neutralRate;
+};
+
 const generateDraftInvoice = async (payload, currentUser) => {
   const {
     caseId,
@@ -372,8 +555,6 @@ const generateDraftInvoice = async (payload, currentUser) => {
     timesheetIds = [],
     lineItems = [],
     amountDue: manualAmountDue,
-    applySplit = false,
-    splitPartySide,
   } = payload;
 
   await assertCanMutateCaseBilling(caseId, currentUser);
@@ -381,15 +562,35 @@ const generateDraftInvoice = async (payload, currentUser) => {
 
   const billingConfig =
     await billingRepository.findBillingConfigByCaseId(caseId);
-  const neutralRate = billingConfig?.neutralHourlyRate
-    ? Number(billingConfig.neutralHourlyRate)
-    : 0;
-  const cmRate = billingConfig?.caseManagementHourlyRate
-    ? Number(billingConfig.caseManagementHourlyRate)
-    : 0;
+
+  const inputSource =
+    billingConfig?.billingInputSource || BillingInputSource.FIRM_INVOICE;
+
+  if (
+    inputSource === BillingInputSource.FIRM_INVOICE &&
+    timesheetIds.length > 0
+  ) {
+    throw new ApiError(
+      400,
+      "This case is configured for Firm Invoice billing. Platform timesheets cannot be used to generate invoices.",
+    );
+  }
+
+  if (
+    inputSource === BillingInputSource.PLATFORM_TIMESHEETS &&
+    timesheetIds.length === 0 &&
+    (!lineItems || lineItems.length === 0) &&
+    invoiceType !== "DEPOSIT"
+  ) {
+    throw new ApiError(
+      400,
+      "This case is configured for Platform Timesheets. Provide approved timesheets or line items.",
+    );
+  }
 
   return prisma.$transaction(async (tx) => {
     let preparedLineItems = [];
+    const trackedHoursByBucket = { prePost: 0 };
 
     if (timesheetIds.length > 0) {
       const timesheets = await tx.neutralTimesheet.findMany({
@@ -404,6 +605,7 @@ const generateDraftInvoice = async (payload, currentUser) => {
             include: { invoice: true },
           },
         },
+        orderBy: { entryDate: "asc" },
       });
 
       if (timesheets.length !== timesheetIds.length) {
@@ -424,12 +626,17 @@ const generateDraftInvoice = async (payload, currentUser) => {
           );
         }
 
-        const rate =
-          ts.activityType === "CASE_MANAGEMENT"
-            ? cmRate || neutralRate
-            : neutralRate;
         const hours = Number(ts.hours);
-        const itemAmount = Math.round(hours * rate * 100) / 100;
+        const rate = resolveTimesheetRate(
+          ts.activityType,
+          billingConfig,
+          trackedHoursByBucket,
+        );
+        if (PRE_POST_ACTIVITY_TYPES.has(ts.activityType)) {
+          trackedHoursByBucket.prePost += hours;
+        }
+
+        const itemAmount = roundMoney(hours * rate);
         preparedLineItems.push({
           description: `${ts.activityType.replace(/_/g, " ")} - ${ts.neutral?.firstName || "Neutral"} ${ts.neutral?.lastName || ""} (${hours} hrs)`,
           quantity: hours,
@@ -447,7 +654,7 @@ const generateDraftInvoice = async (payload, currentUser) => {
         const itemTotal =
           item.amount !== undefined
             ? Number(item.amount)
-            : Math.round(qty * unitPrice * 100) / 100;
+            : roundMoney(qty * unitPrice);
         preparedLineItems.push({
           description: item.description,
           quantity: qty,
@@ -478,13 +685,70 @@ const generateDraftInvoice = async (payload, currentUser) => {
       calculatedTotal += fee;
     }
 
-    if (applySplit && splitPartySide && billingConfig) {
-      const splitPct =
-        splitPartySide === "CLAIMANT"
-          ? Number(billingConfig.claimantSplitPercentage || 50)
-          : Number(billingConfig.respondentSplitPercentage || 50);
-      calculatedTotal =
-        Math.round(((calculatedTotal * splitPct) / 100) * 100) / 100;
+    if (
+      billingConfig?.adminFeePercentage &&
+      Number(billingConfig.adminFeePercentage) > 0 &&
+      calculatedTotal > 0
+    ) {
+      const adminPct = Number(billingConfig.adminFeePercentage);
+      const adminFeeAmount = roundMoney((calculatedTotal * adminPct) / 100);
+      preparedLineItems.push({
+        description: `Admin Fee (${adminPct}%)`,
+        quantity: 1,
+        unitPrice: adminFeeAmount,
+        amount: adminFeeAmount,
+      });
+      calculatedTotal = roundMoney(calculatedTotal + adminFeeAmount);
+    } else if (
+      billingConfig?.administrationFee &&
+      Number(billingConfig.administrationFee) > 0 &&
+      invoiceType === "ADMINISTRATIVE" &&
+      preparedLineItems.length === 0
+    ) {
+      const fee = Number(billingConfig.administrationFee);
+      preparedLineItems.push({
+        description: "Administration Fee",
+        quantity: 1,
+        unitPrice: fee,
+        amount: fee,
+      });
+      calculatedTotal += fee;
+    }
+
+    let splitPctToApply = null;
+    if (
+      billingConfig?.splitBillingEnabled &&
+      payerCasePartyId &&
+      Array.isArray(billingConfig.payerSplits) &&
+      billingConfig.payerSplits.length > 0
+    ) {
+      const split = billingConfig.payerSplits.find(
+        (row) => row.casePartyId === payerCasePartyId,
+      );
+      if (!split) {
+        throw new ApiError(
+          400,
+          "Selected payer is not part of this case's billing split configuration.",
+        );
+      }
+      splitPctToApply = Number(split.splitPercentage);
+    }
+
+    if (splitPctToApply !== null && manualAmountDue === undefined) {
+      preparedLineItems = preparedLineItems.map((item) => {
+        const amount = roundMoney((item.amount * splitPctToApply) / 100);
+        return {
+          ...item,
+          amount,
+          unitPrice:
+            item.quantity && Number(item.quantity) !== 0
+              ? roundMoney(amount / Number(item.quantity))
+              : amount,
+        };
+      });
+      calculatedTotal = roundMoney(
+        preparedLineItems.reduce((acc, curr) => acc + curr.amount, 0),
+      );
     }
 
     const finalAmountDue =
@@ -1319,53 +1583,74 @@ const retryQuickBooksSync = async (data, currentUser) => {
 const generateNeutralPaymentStatement = async (caseId, data, currentUser) => {
   await assertCanMutateCaseBilling(caseId, currentUser);
   await caseService.getCaseById(caseId, currentUser);
+
+  const billingConfig =
+    await billingRepository.findBillingConfigByCaseId(caseId);
   const timesheets = await billingRepository.findTimesheetsByIds(
     data.timesheetIds,
   );
   if (timesheets.length !== data.timesheetIds.length) {
     throw new ApiError(400, "One or more selected timesheets do not exist.");
   }
+  for (const ts of timesheets) {
+    if (ts.caseId !== caseId) {
+      throw new ApiError(400, "All timesheets must belong to the selected case.");
+    }
+  }
 
+  const trackedHoursByBucket = { prePost: 0 };
   let totalServicesAmount = 0;
   let totalExpensesAmount = 0;
 
-  const items = timesheets.map((ts) => {
-    const hours = Number(ts.durationMinutes) / 60;
-    const rate = Number(ts.hourlyRateSnapshot || 0);
-    const amount = Number((hours * rate).toFixed(2));
-    if (ts.activityType === "EXPENSE") {
-      totalExpensesAmount += amount;
-    } else {
+  const items = timesheets
+    .slice()
+    .sort((a, b) => new Date(a.entryDate) - new Date(b.entryDate))
+    .map((ts) => {
+      const hours = Number(ts.hours);
+      const rate = resolveTimesheetRate(
+        ts.activityType,
+        billingConfig,
+        trackedHoursByBucket,
+      );
+      if (PRE_POST_ACTIVITY_TYPES.has(ts.activityType)) {
+        trackedHoursByBucket.prePost += hours;
+      }
+      const amount = roundMoney(hours * rate);
       totalServicesAmount += amount;
-    }
-    return {
-      timesheetId: ts.id,
-      date: ts.serviceDate,
-      activityType: ts.activityType,
-      narrative: ts.narrative,
-      hours: Number(hours.toFixed(2)),
-      hourlyRate: rate,
-      totalAmount: amount,
-    };
-  });
+      return {
+        timesheetId: ts.id,
+        date: ts.entryDate,
+        activityType: ts.activityType,
+        hours: roundMoney(hours),
+        hourlyRate: rate,
+        totalAmount: amount,
+      };
+    });
 
-  const adminFeePercentage = Number(data.adminFeePercentage ?? 15.0);
-  const adminFeeDeduction = Number(
-    ((totalServicesAmount * adminFeePercentage) / 100).toFixed(2),
+  const agreementFeeDefault = billingConfig?.agreementFeePercentage
+    ? Number(billingConfig.agreementFeePercentage)
+    : 15.0;
+  const adminFeePercentage = Number(
+    data.adminFeePercentage ?? agreementFeeDefault,
   );
-  const netPayable = Number(
-    (totalServicesAmount - adminFeeDeduction + totalExpensesAmount).toFixed(2),
+  const adminFeeDeduction = roundMoney(
+    (totalServicesAmount * adminFeePercentage) / 100,
+  );
+  const netPayable = roundMoney(
+    totalServicesAmount - adminFeeDeduction + totalExpensesAmount,
   );
 
   return {
     caseId,
     statementDate: data.statementDate || new Date().toISOString(),
-    neutralParticipantId:
-      data.neutralParticipantId || timesheets[0]?.participantId,
-    totalServicesAmount: Number(totalServicesAmount.toFixed(2)),
+    neutralParticipantId: data.neutralParticipantId || null,
+    totalServicesAmount: roundMoney(totalServicesAmount),
     adminFeePercentage,
+    agreementFeePercentage: billingConfig?.agreementFeePercentage
+      ? Number(billingConfig.agreementFeePercentage)
+      : null,
     adminFeeDeduction,
-    totalExpensesAmount: Number(totalExpensesAmount.toFixed(2)),
+    totalExpensesAmount: roundMoney(totalExpensesAmount),
     netPayable,
     items,
     notes: data.notes || null,

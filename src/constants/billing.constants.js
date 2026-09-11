@@ -27,6 +27,12 @@ const ACTIVITY_RATE_MAP = {
   CASE_MANAGEMENT: "caseManagementHourlyRate",
 };
 
+const PRE_POST_ACTIVITY_TYPES = new Set([
+  "PRE_HEARING_PREPARATION",
+  "REVIEW_OF_DOCUMENTS",
+  "POST_HEARING_FOLLOW_UP",
+]);
+
 module.exports = {
   DEFAULT_PAGE,
   DEFAULT_LIMIT,
@@ -36,4 +42,5 @@ module.exports = {
   AGING_BUCKETS,
   QB_RECORD_TYPES,
   ACTIVITY_RATE_MAP,
+  PRE_POST_ACTIVITY_TYPES,
 };

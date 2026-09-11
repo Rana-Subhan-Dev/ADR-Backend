@@ -1,6 +1,11 @@
 const Joi = require("joi");
 const {
   BillingType,
+  BillingInputSource,
+  BillingMode,
+  TravelTimeRateType,
+  BillingExpensesPolicy,
+  CaseType,
   InvoiceType,
   InvoiceStatus,
   PaymentStatus,
@@ -16,57 +21,126 @@ const invoiceIdParamSchema = Joi.object({
   invoiceId: Joi.string().uuid().required(),
 });
 
+const moneySchema = Joi.number()
+  .precision(2)
+  .min(0)
+  .max(9999999999.99)
+  .allow(null);
+
+const rateSchema = Joi.number()
+  .precision(2)
+  .min(0)
+  .max(99999999.99)
+  .allow(null);
+
+const percentSchema = Joi.number().precision(2).min(0).max(100).allow(null);
+
+const payerSplitSchema = Joi.object({
+  casePartyId: Joi.string().uuid().required(),
+  invoiceContactEmail: Joi.string().email().allow(null, "").optional(),
+  invoiceContactName: Joi.string().trim().max(200).allow(null, "").optional(),
+  splitPercentage: Joi.number().precision(2).min(0).max(100).required(),
+});
+
+const additionalTimekeeperSchema = Joi.object({
+  role: Joi.string().trim().min(1).max(100).required(),
+  hourlyRate: Joi.number().precision(2).min(0).max(99999999.99).required(),
+  expensesAllowed: Joi.string()
+    .valid(...Object.values(BillingExpensesPolicy))
+    .default(BillingExpensesPolicy.NOT_ALLOWED)
+    .optional(),
+});
+
 const caseBillingConfigSchema = Joi.object({
   billingType: Joi.string()
     .valid(...Object.values(BillingType))
     .required(),
-  neutralHourlyRate: Joi.number()
+  billingInputSource: Joi.string()
+    .valid(...Object.values(BillingInputSource))
+    .default(BillingInputSource.FIRM_INVOICE)
+    .optional(),
+  billingMode: Joi.string()
+    .valid(...Object.values(BillingMode))
+    .default(BillingMode.DEPOSIT_BASED)
+    .optional(),
+  neutralHourlyRate: rateSchema.optional(),
+  neutralDailyRate: rateSchema.optional(),
+  caseManagementHourlyRate: rateSchema.optional(),
+  flatFeeAmount: moneySchema.optional(),
+  includedHearingDays: Joi.number().integer().min(0).max(365).allow(null).optional(),
+  includedPrePostHearingHours: Joi.number()
     .precision(2)
     .min(0)
-    .max(99999999.99)
+    .max(9999.99)
     .allow(null)
     .optional(),
-  caseManagementHourlyRate: Joi.number()
-    .precision(2)
-    .min(0)
-    .max(99999999.99)
+  overageHourlyRate: rateSchema.optional(),
+  additionalDayRate: rateSchema.optional(),
+  customRate: moneySchema.optional(),
+  customRateDescription: Joi.string().trim().max(500).allow(null, "").optional(),
+  expensesPolicy: Joi.string()
+    .valid(...Object.values(BillingExpensesPolicy))
     .allow(null)
     .optional(),
-  flatFeeAmount: Joi.number()
-    .precision(2)
-    .min(0)
-    .max(9999999999.99)
-    .allow(null)
+  travelTimeRateType: Joi.string()
+    .valid(...Object.values(TravelTimeRateType))
+    .default(TravelTimeRateType.FREE)
     .optional(),
-  claimantSplitPercentage: Joi.number()
-    .precision(2)
-    .min(0)
-    .max(100)
-    .allow(null)
+  travelTimeCustomHourlyRate: rateSchema.optional(),
+  splitBillingEnabled: Joi.boolean().default(false).optional(),
+  roundingResidualCasePartyId: Joi.string().uuid().allow(null).optional(),
+  payerSplits: Joi.array().items(payerSplitSchema).max(20).optional(),
+  additionalTimekeepers: Joi.array()
+    .items(additionalTimekeeperSchema)
+    .max(50)
     .optional(),
-  respondentSplitPercentage: Joi.number()
-    .precision(2)
-    .min(0)
-    .max(100)
-    .allow(null)
-    .optional(),
-  setupFee: Joi.number()
-    .precision(2)
-    .min(0)
-    .max(9999999999.99)
-    .allow(null)
-    .optional(),
-  administrationFee: Joi.number()
-    .precision(2)
-    .min(0)
-    .max(9999999999.99)
+  setupFee: moneySchema.optional(),
+  administrationFee: moneySchema.optional(),
+  adminFeePercentage: percentSchema.optional(),
+  agreementFeePercentage: percentSchema.optional(),
+  fedArbFeeScheduleType: Joi.string()
+    .valid(...Object.values(CaseType))
     .allow(null)
     .optional(),
   taxApplicability: Joi.boolean().default(false).optional(),
   deliveryContactEmail: Joi.string().email().allow(null, "").optional(),
   billingNotes: Joi.string().max(5000).allow(null, "").optional(),
+  accountingAuditComplete: Joi.boolean().default(false).optional(),
   hasTrustAccount: Joi.boolean().default(false).optional(),
-});
+})
+  .custom((value, helpers) => {
+    if (value.splitBillingEnabled && Array.isArray(value.payerSplits)) {
+      const total = value.payerSplits.reduce(
+        (sum, row) => sum + Number(row.splitPercentage || 0),
+        0,
+      );
+      if (Math.abs(total - 100) > 0.01) {
+        return helpers.message(
+          "Split percentages must total exactly 100% when split billing is enabled.",
+        );
+      }
+      if (
+        value.roundingResidualCasePartyId &&
+        !value.payerSplits.some(
+          (row) => row.casePartyId === value.roundingResidualCasePartyId,
+        )
+      ) {
+        return helpers.message(
+          "Rounding residual payer must be one of the configured payer splits.",
+        );
+      }
+    }
+    if (
+      value.travelTimeRateType === TravelTimeRateType.CUSTOM_HOURLY &&
+      (value.travelTimeCustomHourlyRate === undefined ||
+        value.travelTimeCustomHourlyRate === null)
+    ) {
+      return helpers.message(
+        "travelTimeCustomHourlyRate is required when travel time uses a custom hourly rate.",
+      );
+    }
+    return value;
+  });
 
 const listBillingConfigurationsSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
@@ -74,6 +148,12 @@ const listBillingConfigurationsSchema = Joi.object({
   search: Joi.string().trim().max(100).allow("").optional(),
   billingType: Joi.string()
     .valid(...Object.values(BillingType))
+    .optional(),
+  billingInputSource: Joi.string()
+    .valid(...Object.values(BillingInputSource))
+    .optional(),
+  billingMode: Joi.string()
+    .valid(...Object.values(BillingMode))
     .optional(),
   status: Joi.string().valid("CONFIGURED", "INCOMPLETE").optional(),
   caseStatus: Joi.string().optional(),
@@ -128,8 +208,6 @@ const generateInvoiceSchema = Joi.object({
   timesheetIds: Joi.array().items(Joi.string().uuid()).optional(),
   lineItems: Joi.array().items(lineItemInputSchema).optional(),
   amountDue: Joi.number().precision(2).min(0).max(9999999999.99).optional(),
-  applySplit: Joi.boolean().default(false).optional(),
-  splitPartySide: Joi.string().valid("CLAIMANT", "RESPONDENT").optional(),
 });
 
 const updateInvoiceSchema = Joi.object({
