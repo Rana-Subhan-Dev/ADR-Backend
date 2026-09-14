@@ -11,6 +11,7 @@ const {
   PaymentStatus,
   IntegrationSyncStatus,
   TimesheetActivityType,
+  InvoiceAttachmentType,
 } = require("@prisma/client");
 
 const caseIdParamSchema = Joi.object({
@@ -191,10 +192,22 @@ const listApprovedTimesheetsSchema = Joi.object({
 
 const lineItemInputSchema = Joi.object({
   description: Joi.string().trim().min(1).max(500).required(),
+  secondaryDescription: Joi.string().trim().max(1000).allow(null, "").optional(),
   quantity: Joi.number().precision(2).positive().max(999999.99).default(1),
   unitPrice: Joi.number().precision(2).min(0).max(9999999999.99).required(),
   amount: Joi.number().precision(2).min(0).max(9999999999.99).optional(),
+  serviceDate: Joi.date().iso().allow(null).optional(),
+  referenceCode: Joi.string().trim().max(100).allow(null, "").optional(),
+  sourceLabel: Joi.string().trim().max(200).allow(null, "").optional(),
   relatedTimesheetId: Joi.string().uuid().allow(null).optional(),
+});
+
+const attachmentInputSchema = Joi.object({
+  documentId: Joi.string().uuid().required(),
+  attachmentType: Joi.string()
+    .valid(...Object.values(InvoiceAttachmentType))
+    .required(),
+  isSelected: Joi.boolean().default(true).optional(),
 });
 
 const generateInvoiceSchema = Joi.object({
@@ -202,21 +215,55 @@ const generateInvoiceSchema = Joi.object({
   invoiceType: Joi.string()
     .valid(...Object.values(InvoiceType))
     .required(),
+  billingInputSource: Joi.string()
+    .valid(...Object.values(BillingInputSource))
+    .optional(),
   payerCasePartyId: Joi.string().uuid().allow(null).optional(),
+  payerCasePartyIds: Joi.array().items(Joi.string().uuid()).optional(),
   dueDate: Joi.date().iso().allow(null).optional(),
+  invoiceDate: Joi.date().iso().allow(null).optional(),
+  billingPeriodStart: Joi.date().iso().allow(null).optional(),
+  billingPeriodEnd: Joi.date().iso().allow(null).optional(),
+  firmInvoiceNumber: Joi.string().trim().max(100).allow(null, "").optional(),
+  firmInvoiceDate: Joi.date().iso().allow(null).optional(),
+  firmInvoiceAmount: moneySchema.optional(),
+  firmExpensesAmount: moneySchema.optional(),
+  clientBillingRef: Joi.string().trim().max(100).allow(null, "").optional(),
+  taxRate: percentSchema.optional(),
+  notes: Joi.string().max(5000).allow(null, "").optional(),
   specialInstructions: Joi.string().max(5000).allow(null, "").optional(),
   timesheetIds: Joi.array().items(Joi.string().uuid()).optional(),
   lineItems: Joi.array().items(lineItemInputSchema).optional(),
+  attachments: Joi.array().items(attachmentInputSchema).max(50).optional(),
   amountDue: Joi.number().precision(2).min(0).max(9999999999.99).optional(),
 });
 
 const updateInvoiceSchema = Joi.object({
   payerCasePartyId: Joi.string().uuid().allow(null).optional(),
   dueDate: Joi.date().iso().allow(null).optional(),
+  invoiceDate: Joi.date().iso().allow(null).optional(),
+  billingPeriodStart: Joi.date().iso().allow(null).optional(),
+  billingPeriodEnd: Joi.date().iso().allow(null).optional(),
+  firmInvoiceNumber: Joi.string().trim().max(100).allow(null, "").optional(),
+  firmInvoiceDate: Joi.date().iso().allow(null).optional(),
+  firmInvoiceAmount: moneySchema.optional(),
+  firmExpensesAmount: moneySchema.optional(),
+  clientBillingRef: Joi.string().trim().max(100).allow(null, "").optional(),
+  taxRate: percentSchema.optional(),
   specialInstructions: Joi.string().max(5000).allow(null, "").optional(),
+  notes: Joi.string().max(5000).allow(null, "").optional(),
   lineItems: Joi.array().items(lineItemInputSchema).optional(),
   amountDue: Joi.number().precision(2).min(0).max(9999999999.99).optional(),
+  attachments: Joi.array().items(attachmentInputSchema).max(50).optional(),
 }).min(1);
+
+const invoiceBatchIdParamSchema = Joi.object({
+  batchId: Joi.string().uuid().required(),
+});
+
+const updateBatchAttachmentsSchema = Joi.object({
+  attachments: Joi.array().items(attachmentInputSchema).max(50).required(),
+});
 
 const listInvoicesSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
@@ -325,11 +372,13 @@ const neutralPaymentStatementSchema = Joi.object({
 module.exports = {
   caseIdParamSchema,
   invoiceIdParamSchema,
+  invoiceBatchIdParamSchema,
   caseBillingConfigSchema,
   listBillingConfigurationsSchema,
   listApprovedTimesheetsSchema,
   generateInvoiceSchema,
   updateInvoiceSchema,
+  updateBatchAttachmentsSchema,
   listInvoicesSchema,
   submitForReviewSchema,
   sendInvoiceSchema,

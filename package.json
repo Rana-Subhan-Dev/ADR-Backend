@@ -10,7 +10,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:seed": "node prisma/seed.js",
-    "prisma:seed:admin": "node prisma/seed-admin.js"
+    "prisma:seed:admin": "node prisma/seed-admin.js",
+    "postinstall": "npx puppeteer browsers install chrome"
   },
   "keywords": [],
   "author": "",
@@ -38,6 +39,7 @@
     "nodemailer": "^9.0.5",
     "pg": "^8.22.0",
     "prisma": "^6.19.3",
+    "puppeteer": "24.22.0",
     "winston": "^3.19.0",
     "zod": "^4.4.3"
   },

@@ -148,6 +148,11 @@ const paginate = (items, total, page, limit, key) => ({
 });
 
 const generateInvoiceNumber = async (tx = prisma) => {
+  const numbers = await generateInvoiceNumbers(tx, 1);
+  return numbers[0];
+};
+
+const generateInvoiceNumbers = async (tx = prisma, count = 1) => {
   const currentYear = new Date().getFullYear();
   const prefix = `INV-${currentYear}-`;
   const lastInvoice = await tx.invoice.findFirst({
@@ -162,7 +167,39 @@ const generateInvoiceNumber = async (tx = prisma) => {
       sequence = lastNum + 1;
     }
   }
-  return `${prefix}${String(sequence).padStart(4, "0")}`;
+  return Array.from({ length: count }, (_, index) => {
+    const next = sequence + index;
+    return `${prefix}${String(next).padStart(4, "0")}`;
+  });
+};
+
+const invoiceCreateSelect = {
+  id: true,
+  caseId: true,
+  invoiceBatchId: true,
+  invoiceNumber: true,
+  invoiceType: true,
+  invoiceStatus: true,
+  paymentStatus: true,
+  payerCasePartyId: true,
+  amountDue: true,
+  subtotal: true,
+  taxRate: true,
+  taxAmount: true,
+  dueDate: true,
+  createdAt: true,
+  payerCaseParty: {
+    select: {
+      id: true,
+      side: true,
+      partyType: true,
+      firstName: true,
+      lastName: true,
+      organizationName: true,
+      email: true,
+      state: true,
+    },
+  },
 };
 
 const getCaseBillingConfig = async (caseId, currentUser) => {
@@ -545,15 +582,79 @@ const resolveTimesheetRate = (activityType, billingConfig, trackedHoursByBucket)
   return neutralRate;
 };
 
+const buildDistribution = (invoices, billingConfig) =>
+  invoices.map((invoice) => {
+    const split = billingConfig?.payerSplits?.find(
+      (row) => row.casePartyId === invoice.payerCasePartyId,
+    );
+    const party = invoice.payerCaseParty;
+    return {
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      payerCasePartyId: invoice.payerCasePartyId,
+      payerName:
+        party?.organizationName ||
+        [party?.firstName, party?.lastName].filter(Boolean).join(" ") ||
+        null,
+      invoiceContactEmail: split?.invoiceContactEmail || party?.email || null,
+      invoiceContactName: split?.invoiceContactName || null,
+      state: party?.state || null,
+      splitPercentage: split ? Number(split.splitPercentage) : null,
+      amount: Number(invoice.amountDue),
+    };
+  });
+
+const scaleLineItemsForSplit = (lineItems, splitPct, isResidual, fullTotal) => {
+  const scaled = lineItems.map((item) => {
+    const amount = roundMoney((item.amount * splitPct) / 100);
+    return {
+      ...item,
+      amount,
+      unitPrice:
+        item.quantity && Number(item.quantity) !== 0
+          ? roundMoney(amount / Number(item.quantity))
+          : amount,
+    };
+  });
+  let subtotal = roundMoney(scaled.reduce((acc, curr) => acc + curr.amount, 0));
+  if (isResidual && scaled.length > 0) {
+    const expectedShare = roundMoney((fullTotal * splitPct) / 100);
+    const delta = roundMoney(expectedShare - subtotal);
+    if (delta !== 0) {
+      const last = scaled[scaled.length - 1];
+      last.amount = roundMoney(last.amount + delta);
+      last.unitPrice =
+        last.quantity && Number(last.quantity) !== 0
+          ? roundMoney(last.amount / Number(last.quantity))
+          : last.amount;
+      subtotal = roundMoney(subtotal + delta);
+    }
+  }
+  return { lineItems: scaled, subtotal };
+};
+
 const generateDraftInvoice = async (payload, currentUser) => {
   const {
     caseId,
     invoiceType,
+    billingInputSource: billingInputSourceOverride,
     payerCasePartyId,
+    payerCasePartyIds,
     dueDate,
+    invoiceDate,
+    billingPeriodStart,
+    billingPeriodEnd,
+    firmInvoiceNumber,
+    firmInvoiceDate,
+    firmInvoiceAmount,
+    firmExpensesAmount,
+    clientBillingRef,
+    taxRate = 0,
+    notes,
     specialInstructions,
     timesheetIds = [],
     lineItems = [],
+    attachments = [],
     amountDue: manualAmountDue,
   } = payload;
 
@@ -564,7 +665,9 @@ const generateDraftInvoice = async (payload, currentUser) => {
     await billingRepository.findBillingConfigByCaseId(caseId);
 
   const inputSource =
-    billingConfig?.billingInputSource || BillingInputSource.FIRM_INVOICE;
+    billingInputSourceOverride ||
+    billingConfig?.billingInputSource ||
+    BillingInputSource.FIRM_INVOICE;
 
   if (
     inputSource === BillingInputSource.FIRM_INVOICE &&
@@ -576,10 +679,16 @@ const generateDraftInvoice = async (payload, currentUser) => {
     );
   }
 
+  const hasFirmAmount =
+    firmInvoiceAmount !== undefined &&
+    firmInvoiceAmount !== null &&
+    Number(firmInvoiceAmount) > 0;
+
   if (
     inputSource === BillingInputSource.PLATFORM_TIMESHEETS &&
     timesheetIds.length === 0 &&
     (!lineItems || lineItems.length === 0) &&
+    !hasFirmAmount &&
     invoiceType !== "DEPOSIT"
   ) {
     throw new ApiError(
@@ -588,7 +697,40 @@ const generateDraftInvoice = async (payload, currentUser) => {
     );
   }
 
-  return prisma.$transaction(async (tx) => {
+  let payerTargets = [];
+  if (Array.isArray(payerCasePartyIds) && payerCasePartyIds.length > 0) {
+    payerTargets = payerCasePartyIds;
+  } else if (payerCasePartyId) {
+    payerTargets = [payerCasePartyId];
+  } else if (
+    billingConfig?.splitBillingEnabled &&
+    Array.isArray(billingConfig.payerSplits) &&
+    billingConfig.payerSplits.length > 0
+  ) {
+    payerTargets = billingConfig.payerSplits.map((row) => row.casePartyId);
+  } else {
+    payerTargets = [null];
+  }
+
+  if (
+    billingConfig?.splitBillingEnabled &&
+    billingConfig.payerSplits?.length > 0
+  ) {
+    const allowed = new Set(
+      billingConfig.payerSplits.map((row) => row.casePartyId),
+    );
+    for (const id of payerTargets) {
+      if (id && !allowed.has(id)) {
+        throw new ApiError(
+          400,
+          "Selected payer is not part of this case's billing split configuration.",
+        );
+      }
+    }
+  }
+
+  return prisma.$transaction(
+    async (tx) => {
     let preparedLineItems = [];
     const trackedHoursByBucket = { prePost: 0 };
 
@@ -637,11 +779,16 @@ const generateDraftInvoice = async (payload, currentUser) => {
         }
 
         const itemAmount = roundMoney(hours * rate);
+        const activityLabel = ts.activityType.replace(/_/g, " ");
         preparedLineItems.push({
-          description: `${ts.activityType.replace(/_/g, " ")} - ${ts.neutral?.firstName || "Neutral"} ${ts.neutral?.lastName || ""} (${hours} hrs)`,
+          description: activityLabel,
+          secondaryDescription: `${ts.neutral?.firstName || "Neutral"} ${ts.neutral?.lastName || ""}`.trim(),
           quantity: hours,
           unitPrice: rate,
           amount: itemAmount,
+          serviceDate: ts.entryDate,
+          referenceCode: `TS-${ts.id.slice(0, 8).toUpperCase()}`,
+          sourceLabel: "Neutral Fee Schedule",
           relatedTimesheetId: ts.id,
         });
       }
@@ -657,10 +804,49 @@ const generateDraftInvoice = async (payload, currentUser) => {
             : roundMoney(qty * unitPrice);
         preparedLineItems.push({
           description: item.description,
+          secondaryDescription: emptyToNull(item.secondaryDescription),
           quantity: qty,
           unitPrice,
           amount: itemTotal,
+          serviceDate: item.serviceDate ? new Date(item.serviceDate) : null,
+          referenceCode: emptyToNull(item.referenceCode),
+          sourceLabel: emptyToNull(item.sourceLabel) || "Manual Entry",
           relatedTimesheetId: item.relatedTimesheetId || null,
+        });
+      }
+    }
+
+    if (
+      hasFirmAmount &&
+      preparedLineItems.length === 0 &&
+      inputSource === BillingInputSource.FIRM_INVOICE
+    ) {
+      const firmAmt = Number(firmInvoiceAmount);
+      preparedLineItems.push({
+        description: "Neutral / Firm Invoice",
+        secondaryDescription: firmInvoiceNumber
+          ? `Firm invoice ${firmInvoiceNumber}`
+          : null,
+        quantity: 1,
+        unitPrice: firmAmt,
+        amount: firmAmt,
+        serviceDate: firmInvoiceDate ? new Date(firmInvoiceDate) : null,
+        referenceCode: firmInvoiceNumber || null,
+        sourceLabel: "Firm Invoice",
+        relatedTimesheetId: null,
+      });
+      if (firmExpensesAmount && Number(firmExpensesAmount) > 0) {
+        const exp = Number(firmExpensesAmount);
+        preparedLineItems.push({
+          description: "Expenses",
+          secondaryDescription: null,
+          quantity: 1,
+          unitPrice: exp,
+          amount: exp,
+          serviceDate: firmInvoiceDate ? new Date(firmInvoiceDate) : null,
+          referenceCode: null,
+          sourceLabel: "Firm Invoice",
+          relatedTimesheetId: null,
         });
       }
     }
@@ -678,9 +864,14 @@ const generateDraftInvoice = async (payload, currentUser) => {
       const fee = Number(billingConfig.setupFee);
       preparedLineItems.push({
         description: "Initial Setup Fee",
+        secondaryDescription: null,
         quantity: 1,
         unitPrice: fee,
         amount: fee,
+        serviceDate: null,
+        referenceCode: null,
+        sourceLabel: "FedArb Fee Schedule",
+        relatedTimesheetId: null,
       });
       calculatedTotal += fee;
     }
@@ -688,15 +879,21 @@ const generateDraftInvoice = async (payload, currentUser) => {
     if (
       billingConfig?.adminFeePercentage &&
       Number(billingConfig.adminFeePercentage) > 0 &&
-      calculatedTotal > 0
+      calculatedTotal > 0 &&
+      invoiceType !== "REFUND"
     ) {
       const adminPct = Number(billingConfig.adminFeePercentage);
       const adminFeeAmount = roundMoney((calculatedTotal * adminPct) / 100);
       preparedLineItems.push({
         description: `Admin Fee (${adminPct}%)`,
+        secondaryDescription: "FedArb client-side administration fee",
         quantity: 1,
         unitPrice: adminFeeAmount,
         amount: adminFeeAmount,
+        serviceDate: null,
+        referenceCode: null,
+        sourceLabel: "FedArb Fee Schedule",
+        relatedTimesheetId: null,
       });
       calculatedTotal = roundMoney(calculatedTotal + adminFeeAmount);
     } else if (
@@ -708,101 +905,189 @@ const generateDraftInvoice = async (payload, currentUser) => {
       const fee = Number(billingConfig.administrationFee);
       preparedLineItems.push({
         description: "Administration Fee",
+        secondaryDescription: null,
         quantity: 1,
         unitPrice: fee,
         amount: fee,
+        serviceDate: null,
+        referenceCode: null,
+        sourceLabel: "FedArb Fee Schedule",
+        relatedTimesheetId: null,
       });
       calculatedTotal += fee;
     }
 
-    let splitPctToApply = null;
-    if (
-      billingConfig?.splitBillingEnabled &&
-      payerCasePartyId &&
-      Array.isArray(billingConfig.payerSplits) &&
-      billingConfig.payerSplits.length > 0
-    ) {
-      const split = billingConfig.payerSplits.find(
-        (row) => row.casePartyId === payerCasePartyId,
-      );
-      if (!split) {
-        throw new ApiError(
-          400,
-          "Selected payer is not part of this case's billing split configuration.",
-        );
-      }
-      splitPctToApply = Number(split.splitPercentage);
-    }
-
-    if (splitPctToApply !== null && manualAmountDue === undefined) {
-      preparedLineItems = preparedLineItems.map((item) => {
-        const amount = roundMoney((item.amount * splitPctToApply) / 100);
-        return {
-          ...item,
-          amount,
-          unitPrice:
-            item.quantity && Number(item.quantity) !== 0
-              ? roundMoney(amount / Number(item.quantity))
-              : amount,
-        };
-      });
-      calculatedTotal = roundMoney(
-        preparedLineItems.reduce((acc, curr) => acc + curr.amount, 0),
-      );
-    }
-
-    const finalAmountDue =
+    const fullTotal =
       manualAmountDue !== undefined ? Number(manualAmountDue) : calculatedTotal;
-    const invoiceNumber = await generateInvoiceNumber(tx);
+    const taxRateNum = Number(taxRate || 0);
 
-    const invoice = await tx.invoice.create({
+    const batch = await tx.invoiceBatch.create({
       data: {
         caseId,
-        invoiceNumber,
         invoiceType,
-        invoiceStatus: InvoiceStatus.DRAFT,
-        paymentStatus: PaymentStatus.UNPAID,
-        payerCasePartyId: payerCasePartyId || null,
-        amountDue: finalAmountDue,
-        dueDate: dueDate ? new Date(dueDate) : null,
-        specialInstructions: specialInstructions || null,
-        lineItems: {
-          create: preparedLineItems,
-        },
+        billingInputSource: inputSource,
+        billingPeriodStart: billingPeriodStart
+          ? new Date(billingPeriodStart)
+          : null,
+        billingPeriodEnd: billingPeriodEnd ? new Date(billingPeriodEnd) : null,
+        firmInvoiceNumber: emptyToNull(firmInvoiceNumber),
+        firmInvoiceDate: firmInvoiceDate ? new Date(firmInvoiceDate) : null,
+        firmInvoiceAmount:
+          firmInvoiceAmount !== undefined && firmInvoiceAmount !== null
+            ? Number(firmInvoiceAmount)
+            : null,
+        firmExpensesAmount:
+          firmExpensesAmount !== undefined && firmExpensesAmount !== null
+            ? Number(firmExpensesAmount)
+            : null,
+        notes: emptyToNull(notes) || emptyToNull(specialInstructions),
+        createdByUserId: currentUser.id,
+        attachments:
+          attachments.length > 0
+            ? {
+                create: attachments.map((att) => ({
+                  documentId: att.documentId,
+                  attachmentType: att.attachmentType,
+                  isSelected: att.isSelected !== false,
+                })),
+              }
+            : undefined,
       },
-      select: billingRepository.invoiceSelect,
+      select: { id: true },
     });
 
-    await tx.auditLog.create({
-      data: {
+    const applySplits =
+      billingConfig?.splitBillingEnabled &&
+      billingConfig.payerSplits?.length > 0 &&
+      payerTargets.every((id) => id) &&
+      manualAmountDue === undefined;
+
+    const residualId = billingConfig?.roundingResidualCasePartyId || null;
+    const invoiceNumbers = await generateInvoiceNumbers(tx, payerTargets.length);
+    const createdInvoices = [];
+    const auditRows = [];
+    const timelineRows = [];
+
+    for (let i = 0; i < payerTargets.length; i += 1) {
+      const targetPayerId = payerTargets[i];
+      let payerLineItems = preparedLineItems;
+      let subtotal = fullTotal;
+
+      if (applySplits && targetPayerId) {
+        const split = billingConfig.payerSplits.find(
+          (row) => row.casePartyId === targetPayerId,
+        );
+        const splitPct = Number(split.splitPercentage);
+        const scaled = scaleLineItemsForSplit(
+          preparedLineItems,
+          splitPct,
+          residualId === targetPayerId,
+          fullTotal,
+        );
+        payerLineItems = scaled.lineItems;
+        subtotal = scaled.subtotal;
+      }
+
+      const taxAmount = roundMoney((subtotal * taxRateNum) / 100);
+      const amountDue = roundMoney(subtotal + taxAmount);
+      const invoiceNumber = invoiceNumbers[i];
+
+      const invoice = await tx.invoice.create({
+        data: {
+          caseId,
+          invoiceBatchId: batch.id,
+          invoiceNumber,
+          invoiceType,
+          invoiceStatus: InvoiceStatus.DRAFT,
+          paymentStatus: PaymentStatus.UNPAID,
+          payerCasePartyId: targetPayerId,
+          invoiceDate: invoiceDate ? new Date(invoiceDate) : new Date(),
+          billingInputSource: inputSource,
+          billingPeriodStart: billingPeriodStart
+            ? new Date(billingPeriodStart)
+            : null,
+          billingPeriodEnd: billingPeriodEnd
+            ? new Date(billingPeriodEnd)
+            : null,
+          firmInvoiceNumber: emptyToNull(firmInvoiceNumber),
+          firmInvoiceDate: firmInvoiceDate ? new Date(firmInvoiceDate) : null,
+          firmInvoiceAmount:
+            firmInvoiceAmount !== undefined && firmInvoiceAmount !== null
+              ? Number(firmInvoiceAmount)
+              : null,
+          firmExpensesAmount:
+            firmExpensesAmount !== undefined && firmExpensesAmount !== null
+              ? Number(firmExpensesAmount)
+              : null,
+          clientBillingRef: emptyToNull(clientBillingRef),
+          subtotal,
+          taxRate: taxRateNum,
+          taxAmount,
+          amountDue,
+          dueDate: dueDate ? new Date(dueDate) : null,
+          specialInstructions:
+            emptyToNull(specialInstructions) || emptyToNull(notes),
+          lineItems: {
+            create: payerLineItems,
+          },
+        },
+        select: invoiceCreateSelect,
+      });
+
+      createdInvoices.push(invoice);
+      auditRows.push({
         actingUserId: currentUser.id,
         actingUserRoleSnapshot: currentUser.role?.name || null,
         action: "GENERATE_DRAFT_INVOICE",
         module: "BILLING",
         affectedRecordType: "Invoice",
         affectedRecordId: invoice.id,
-        newValue: JSON.parse(JSON.stringify(invoice)),
-      },
-    });
-
-    await tx.caseTimelineEvent.create({
-      data: {
+        newValue: {
+          invoiceNumber,
+          invoiceType,
+          amountDue,
+          invoiceBatchId: batch.id,
+        },
+      });
+      timelineRows.push({
         caseId,
         eventType: CaseTimelineEventType.INVOICE_ISSUED,
         relatedRecordType: "Invoice",
         relatedRecordId: invoice.id,
-        summary: `Draft invoice ${invoice.invoiceNumber} created for amount $${finalAmountDue.toFixed(2)}`,
+        summary: `Draft invoice ${invoice.invoiceNumber} created for amount $${amountDue.toFixed(2)}`,
         actorUserId: currentUser.id,
         newValue: JSON.stringify({
           invoiceNumber,
           invoiceType,
-          amountDue: finalAmountDue,
+          amountDue,
+          invoiceBatchId: batch.id,
         }),
-      },
+      });
+    }
+
+    if (auditRows.length > 0) {
+      await tx.auditLog.createMany({ data: auditRows });
+    }
+    if (timelineRows.length > 0) {
+      await tx.caseTimelineEvent.createMany({ data: timelineRows });
+    }
+
+    const fullBatch = await tx.invoiceBatch.findUnique({
+      where: { id: batch.id },
+      select: billingRepository.invoiceBatchSelect,
     });
 
-    return invoice;
-  });
+    return {
+      batch: fullBatch,
+      invoices: createdInvoices,
+      distribution: buildDistribution(createdInvoices, billingConfig),
+    };
+    },
+    {
+      maxWait: 15000,
+      timeout: 30000,
+    },
+  );
 };
 
 const getInvoiceById = async (invoiceId, currentUser) => {
@@ -815,7 +1100,37 @@ const getInvoiceById = async (invoiceId, currentUser) => {
   const invoice = await billingRepository.findInvoiceById(invoiceId);
   if (!invoice) throw new ApiError(404, "Invoice not found.");
   await caseService.getCaseById(invoice.caseId, currentUser);
-  return invoice;
+
+  let distribution = null;
+  if (invoice.invoiceBatchId) {
+    const batch = await billingRepository.findInvoiceBatchById(
+      invoice.invoiceBatchId,
+    );
+    const billingConfig =
+      await billingRepository.findBillingConfigByCaseId(invoice.caseId);
+    distribution = buildDistribution(batch?.invoices || [], billingConfig);
+  }
+
+  return { ...invoice, distribution };
+};
+
+const getInvoiceBatchById = async (batchId, currentUser) => {
+  if (!isAuthorizedForBilling(currentUser)) {
+    throw new ApiError(
+      403,
+      "You do not have permission to view invoice batches.",
+    );
+  }
+  const batch = await billingRepository.findInvoiceBatchById(batchId);
+  if (!batch) throw new ApiError(404, "Invoice batch not found.");
+  await caseService.getCaseById(batch.caseId, currentUser);
+  const billingConfig = await billingRepository.findBillingConfigByCaseId(
+    batch.caseId,
+  );
+  return {
+    ...batch,
+    distribution: buildDistribution(batch.invoices || [], billingConfig),
+  };
 };
 
 const updateInvoice = async (invoiceId, payload, currentUser) => {
@@ -953,6 +1268,8 @@ const finalizeInvoice = async (invoiceId, currentUser) => {
       where: { id: invoiceId },
       data: {
         invoiceStatus: InvoiceStatus.ISSUED,
+        finalizedAt: new Date(),
+        finalizedByUserId: currentUser.id,
       },
       select: billingRepository.invoiceSelect,
     });
@@ -985,6 +1302,34 @@ const finalizeInvoice = async (invoiceId, currentUser) => {
   });
 };
 
+const finalizeInvoiceBatch = async (batchId, currentUser) => {
+  const batch = await billingRepository.findInvoiceBatchById(batchId);
+  if (!batch) throw new ApiError(404, "Invoice batch not found.");
+  await assertCanMutateCaseBilling(batch.caseId, currentUser);
+
+  const draftInvoices = (batch.invoices || []).filter(
+    (inv) => inv.invoiceStatus === InvoiceStatus.DRAFT,
+  );
+  if (draftInvoices.length === 0) {
+    throw new ApiError(400, "No draft invoices found in this batch to finalize.");
+  }
+
+  const finalized = [];
+  for (const inv of draftInvoices) {
+    finalized.push(await finalizeInvoice(inv.id, currentUser));
+  }
+
+  const refreshed = await billingRepository.findInvoiceBatchById(batchId);
+  const billingConfig = await billingRepository.findBillingConfigByCaseId(
+    batch.caseId,
+  );
+  return {
+    ...refreshed,
+    distribution: buildDistribution(refreshed.invoices || [], billingConfig),
+    finalizedInvoices: finalized,
+  };
+};
+
 const sendInvoice = async (invoiceId, payload, currentUser) => {
   const invoice = await billingRepository.findInvoiceById(invoiceId);
   if (!invoice) throw new ApiError(404, "Invoice not found.");
@@ -1000,15 +1345,35 @@ const sendInvoice = async (invoiceId, payload, currentUser) => {
     );
   }
 
-  const { recipientEmails, subject, message } = payload;
+  const { recipientEmails, subject, message, attachPdf = false } = payload;
   const emailSubject =
     subject || `Invoice ${invoice.invoiceNumber} from FedArb ADR`;
   const emailBody =
     message ||
     `Please find invoice ${invoice.invoiceNumber} for Case ${invoice.case?.caseNumber || ""}. Total Due: $${Number(invoice.amountDue).toFixed(2)}.`;
 
+  let pdfAttachment = null;
+  if (attachPdf) {
+    const invoicePdfService = require("./invoicePdf.service");
+    const { buffer, filename } = await invoicePdfService.generateInvoicePdf(
+      invoiceId,
+      currentUser,
+    );
+    pdfAttachment = {
+      filename,
+      content: buffer,
+      contentType: "application/pdf",
+    };
+  }
+
   for (const recipient of recipientEmails) {
-    await sendEmail(emailSubject, emailBody, recipient, "TEXT");
+    await sendEmail(
+      emailSubject,
+      emailBody,
+      recipient,
+      "TEXT",
+      pdfAttachment ? [pdfAttachment] : [],
+    );
   }
 
   return prisma.$transaction(async (tx) => {
@@ -1030,6 +1395,7 @@ const sendInvoice = async (invoiceId, payload, currentUser) => {
         affectedRecordId: invoiceId,
         newValue: {
           recipients: recipientEmails,
+          attachPdf: Boolean(attachPdf),
           sentAt: new Date().toISOString(),
         },
       },
@@ -1664,9 +2030,11 @@ module.exports = {
   getApprovedTimesheets,
   generateDraftInvoice,
   getInvoiceById,
+  getInvoiceBatchById,
   updateInvoice,
   submitInvoiceForReview,
   finalizeInvoice,
+  finalizeInvoiceBatch,
   sendInvoice,
   voidInvoice,
   reissueInvoice,

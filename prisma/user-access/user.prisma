@@ -70,6 +70,8 @@ model User {
   completedChecklistItems    ChecklistItem[]
   neutralTimesheets          NeutralTimesheet[]          @relation("NeutralTimesheetNeutral")
   approvedTimesheets         NeutralTimesheet[]          @relation("NeutralTimesheetApprover")
+  invoiceBatchesCreated      InvoiceBatch[]              @relation("InvoiceBatchCreatedBy")
+  invoicesFinalized          Invoice[]                   @relation("InvoiceFinalizedBy")
   importedMigrationBatches   MigrationBatch[]
 
   createdAt DateTime @default(now()) @db.Timestamp(3)

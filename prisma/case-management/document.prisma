@@ -78,6 +78,7 @@ model Document {
   accessLogs   DocumentAccessLog[]
 
   fulfillsSubmissionRequests DocumentSubmissionRequest[] @relation("DocumentFulfillsSubmissionRequest")
+  invoiceAttachments         InvoiceAttachment[]
   signedForEnvelopes         DocuSignEnvelope[]
 
   legacyReferenceId String?

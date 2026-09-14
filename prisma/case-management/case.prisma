@@ -53,6 +53,7 @@ model Case {
   neutralTimesheets    NeutralTimesheet[]
   billingConfiguration BillingConfiguration?
   invoices             Invoice[]
+  invoiceBatches       InvoiceBatch[]
   docuSignEnvelopes    DocuSignEnvelope[]
 
   createdAt DateTime @default(now()) @db.Timestamp(3)

@@ -1,8 +1,43 @@
+model InvoiceBatch {
+  id String @id @default(uuid())
+
+  caseId String
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  invoiceType        InvoiceType
+  billingInputSource BillingInputSource?
+
+  billingPeriodStart DateTime?
+  billingPeriodEnd   DateTime?
+
+  firmInvoiceNumber  String?
+  firmInvoiceDate    DateTime?
+  firmInvoiceAmount  Decimal? @db.Decimal(12, 2)
+  firmExpensesAmount Decimal? @db.Decimal(12, 2)
+
+  notes String? @db.Text
+
+  createdByUserId String?
+  createdBy       User?   @relation("InvoiceBatchCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  invoices    Invoice[]
+  attachments InvoiceAttachment[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([caseId])
+  @@map("invoice_batches")
+}
+
 model Invoice {
   id String @id @default(uuid())
 
   caseId String
   case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  invoiceBatchId String?
+  invoiceBatch   InvoiceBatch? @relation(fields: [invoiceBatchId], references: [id], onDelete: SetNull)
 
   invoiceNumber String        @unique
   invoiceType   InvoiceType
@@ -12,10 +47,30 @@ model Invoice {
   payerCasePartyId String?
   payerCaseParty   CaseParty? @relation(fields: [payerCasePartyId], references: [id], onDelete: SetNull)
 
-  amountDue Decimal   @db.Decimal(12, 2)
+  invoiceDate DateTime @default(now()) @db.Timestamp(3)
+
+  billingInputSource BillingInputSource?
+  billingPeriodStart DateTime?
+  billingPeriodEnd   DateTime?
+
+  firmInvoiceNumber  String?
+  firmInvoiceDate    DateTime?
+  firmInvoiceAmount  Decimal? @db.Decimal(12, 2)
+  firmExpensesAmount Decimal? @db.Decimal(12, 2)
+
+  clientBillingRef String?
+
+  subtotal  Decimal  @default(0) @db.Decimal(12, 2)
+  taxRate   Decimal  @default(0) @db.Decimal(5, 2)
+  taxAmount Decimal  @default(0) @db.Decimal(12, 2)
+  amountDue Decimal  @db.Decimal(12, 2)
   dueDate   DateTime?
 
   specialInstructions String? @db.Text
+
+  finalizedAt        DateTime?
+  finalizedByUserId  String?
+  finalizedBy        User?     @relation("InvoiceFinalizedBy", fields: [finalizedByUserId], references: [id], onDelete: SetNull)
 
   quickBooksInvoiceId    String?
   quickBooksSyncStatus   IntegrationSyncStatus?
@@ -29,6 +84,7 @@ model Invoice {
   updatedAt DateTime @updatedAt @db.Timestamp(3)
 
   @@index([caseId, invoiceStatus, paymentStatus])
+  @@index([invoiceBatchId])
   @@map("invoices")
 }
 
@@ -38,15 +94,40 @@ model InvoiceLineItem {
   invoiceId String
   invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
-  description String
-  quantity    Decimal @default(1) @db.Decimal(8, 2)
-  unitPrice   Decimal @db.Decimal(12, 2)
-  amount      Decimal @db.Decimal(12, 2)
+  description          String
+  secondaryDescription String?
+  quantity             Decimal  @default(1) @db.Decimal(8, 2)
+  unitPrice            Decimal  @db.Decimal(12, 2)
+  amount               Decimal  @db.Decimal(12, 2)
+
+  serviceDate   DateTime?
+  referenceCode String?
+  sourceLabel   String?
 
   relatedTimesheetId String?
   relatedTimesheet   NeutralTimesheet? @relation(fields: [relatedTimesheetId], references: [id], onDelete: SetNull)
 
   @@map("invoice_line_items")
+}
+
+model InvoiceAttachment {
+  id String @id @default(uuid())
+
+  invoiceBatchId String
+  invoiceBatch   InvoiceBatch @relation(fields: [invoiceBatchId], references: [id], onDelete: Cascade)
+
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  attachmentType InvoiceAttachmentType
+  isSelected     Boolean               @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@unique([invoiceBatchId, documentId])
+  @@index([documentId])
+  @@map("invoice_attachments")
 }
 
 model Payment {

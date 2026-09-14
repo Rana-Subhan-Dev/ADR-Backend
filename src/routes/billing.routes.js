@@ -45,13 +45,6 @@ router.get(
   controller.getApprovedTimesheets,
 );
 
-router.get(
-  "/invoices",
-  requirePermission(PermissionModule.BILLING, PermissionAction.VIEW),
-  validate(validation.listInvoicesSchema, "query"),
-  controller.getInvoicesList,
-);
-
 router.post(
   "/invoices",
   requirePermission(PermissionModule.BILLING, PermissionAction.CREATE),
@@ -60,10 +53,38 @@ router.post(
 );
 
 router.get(
+  "/invoice-batches/:batchId",
+  requirePermission(PermissionModule.BILLING, PermissionAction.VIEW),
+  validate(validation.invoiceBatchIdParamSchema, "params"),
+  controller.getInvoiceBatchById,
+);
+
+router.post(
+  "/invoice-batches/:batchId/finalize",
+  requirePermission(PermissionModule.BILLING, PermissionAction.APPROVE),
+  validate(validation.invoiceBatchIdParamSchema, "params"),
+  controller.finalizeInvoiceBatch,
+);
+
+router.get(
+  "/invoices",
+  requirePermission(PermissionModule.BILLING, PermissionAction.VIEW),
+  validate(validation.listInvoicesSchema, "query"),
+  controller.getInvoicesList,
+);
+
+router.get(
   "/invoices/:invoiceId",
   requirePermission(PermissionModule.BILLING, PermissionAction.VIEW),
   validate(validation.invoiceIdParamSchema, "params"),
   controller.getInvoiceById,
+);
+
+router.get(
+  "/invoices/:invoiceId/pdf",
+  requirePermission(PermissionModule.BILLING, PermissionAction.VIEW),
+  validate(validation.invoiceIdParamSchema, "params"),
+  controller.downloadInvoicePdf,
 );
 
 router.patch(

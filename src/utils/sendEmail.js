@@ -18,21 +18,31 @@ const transporter = nodemailer.createTransport({
   socketTimeout: 15000,
 });
 
-const sendEmail = async (subject, content, email, type = "TEXT") => {
+const sendEmail = async (
+  subject,
+  content,
+  email,
+  type = "TEXT",
+  extraAttachments = [],
+) => {
+  const attachments = [];
+  if (type === "HTML") {
+    attachments.push({
+      filename: "fedarb-logo.png",
+      path: LOGO_PATH,
+      cid: LOGO_CID,
+    });
+  }
+  if (Array.isArray(extraAttachments) && extraAttachments.length > 0) {
+    attachments.push(...extraAttachments);
+  }
+
   const mailOptions = {
     from: process.env.SMTP_FROM || process.env.SMTP_USER,
     to: email,
     subject,
     ...(type === "HTML" ? { html: content } : { text: content }),
-    ...(type === "HTML" && {
-      attachments: [
-        {
-          filename: "fedarb-logo.png",
-          path: LOGO_PATH,
-          cid: LOGO_CID,
-        },
-      ],
-    }),
+    ...(attachments.length > 0 && { attachments }),
   };
 
   return transporter.sendMail(mailOptions);

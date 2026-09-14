@@ -44,6 +44,12 @@ const generateDraftInvoice = respond(
   (req) => billingService.generateDraftInvoice(req.body, req.user),
 );
 
+const getInvoiceBatchById = respond(
+  200,
+  "Invoice batch fetched successfully.",
+  (req) => billingService.getInvoiceBatchById(req.params.batchId, req.user),
+);
+
 const getInvoicesList = respond(200, "Invoices fetched successfully.", (req) =>
   billingService.getInvoicesList(req.query, req.user),
 );
@@ -71,6 +77,13 @@ const submitInvoiceForReview = respond(
 
 const finalizeInvoice = respond(200, "Invoice finalized successfully.", (req) =>
   billingService.finalizeInvoice(req.params.invoiceId, req.user),
+);
+
+const finalizeInvoiceBatch = respond(
+  200,
+  "Invoice batch finalized successfully.",
+  (req) =>
+    billingService.finalizeInvoiceBatch(req.params.batchId, req.user),
 );
 
 const sendInvoice = respond(200, "Invoice sent successfully.", (req) =>
@@ -132,18 +145,32 @@ const generateNeutralPaymentStatement = respond(
     ),
 );
 
+const downloadInvoicePdf = asyncHandler(async (req, res) => {
+  const invoicePdfService = require("../services/invoicePdf.service");
+  const { buffer, filename } = await invoicePdfService.generateInvoicePdf(
+    req.params.invoiceId,
+    req.user,
+  );
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  return res.status(200).send(buffer);
+});
+
 module.exports = {
   getBillingConfigurationsList,
   getCaseBillingConfig,
   upsertCaseBillingConfig,
   getApprovedTimesheets,
   generateDraftInvoice,
+  getInvoiceBatchById,
   getInvoicesList,
   getInvoiceById,
   updateInvoice,
   submitInvoiceForReview,
   finalizeInvoice,
+  finalizeInvoiceBatch,
   sendInvoice,
+  downloadInvoicePdf,
   voidInvoice,
   reissueInvoice,
   recordPayment,

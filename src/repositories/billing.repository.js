@@ -106,19 +106,74 @@ const billingConfigSelect = {
 const invoiceSelect = {
   id: true,
   caseId: true,
+  invoiceBatchId: true,
   invoiceNumber: true,
   invoiceType: true,
   invoiceStatus: true,
   paymentStatus: true,
   payerCasePartyId: true,
+  invoiceDate: true,
+  billingInputSource: true,
+  billingPeriodStart: true,
+  billingPeriodEnd: true,
+  firmInvoiceNumber: true,
+  firmInvoiceDate: true,
+  firmInvoiceAmount: true,
+  firmExpensesAmount: true,
+  clientBillingRef: true,
+  subtotal: true,
+  taxRate: true,
+  taxAmount: true,
   amountDue: true,
   dueDate: true,
   specialInstructions: true,
+  finalizedAt: true,
+  finalizedByUserId: true,
   quickBooksInvoiceId: true,
   quickBooksSyncStatus: true,
   quickBooksLastSyncedAt: true,
   createdAt: true,
   updatedAt: true,
+  finalizedBy: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+      role: { select: { name: true } },
+    },
+  },
+  invoiceBatch: {
+    select: {
+      id: true,
+      caseId: true,
+      invoiceType: true,
+      billingInputSource: true,
+      billingPeriodStart: true,
+      billingPeriodEnd: true,
+      firmInvoiceNumber: true,
+      firmInvoiceDate: true,
+      firmInvoiceAmount: true,
+      firmExpensesAmount: true,
+      notes: true,
+      createdByUserId: true,
+      attachments: {
+        select: {
+          id: true,
+          documentId: true,
+          attachmentType: true,
+          isSelected: true,
+          document: {
+            select: {
+              id: true,
+              name: true,
+              description: true,
+            },
+          },
+        },
+      },
+    },
+  },
   case: {
     select: {
       id: true,
@@ -126,6 +181,27 @@ const invoiceSelect = {
       title: true,
       caseType: true,
       lifecycleStatus: true,
+      participants: {
+        where: {
+          role: { in: ["NEUTRAL", "CASE_MANAGER"] },
+          accessStatus: "ACTIVE",
+        },
+        select: {
+          id: true,
+          role: true,
+          user: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+            },
+          },
+        },
+      },
+      billingConfiguration: {
+        select: billingConfigScalarSelect,
+      },
     },
   },
   payerCaseParty: {
@@ -149,9 +225,13 @@ const invoiceSelect = {
       id: true,
       invoiceId: true,
       description: true,
+      secondaryDescription: true,
       quantity: true,
       unitPrice: true,
       amount: true,
+      serviceDate: true,
+      referenceCode: true,
+      sourceLabel: true,
       relatedTimesheetId: true,
       relatedTimesheet: {
         select: {
@@ -192,6 +272,137 @@ const invoiceSelect = {
       quickBooksCreditNoteId: true,
     },
     orderBy: { issuedAt: "desc" },
+  },
+};
+
+const invoiceBatchSelect = {
+  id: true,
+  caseId: true,
+  invoiceType: true,
+  billingInputSource: true,
+  billingPeriodStart: true,
+  billingPeriodEnd: true,
+  firmInvoiceNumber: true,
+  firmInvoiceDate: true,
+  firmInvoiceAmount: true,
+  firmExpensesAmount: true,
+  notes: true,
+  createdByUserId: true,
+  createdAt: true,
+  updatedAt: true,
+  createdBy: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+    },
+  },
+  attachments: {
+    select: {
+      id: true,
+      documentId: true,
+      attachmentType: true,
+      isSelected: true,
+      document: {
+        select: { id: true, name: true, description: true },
+      },
+    },
+  },
+  invoices: {
+    select: {
+      id: true,
+      caseId: true,
+      invoiceBatchId: true,
+      invoiceNumber: true,
+      invoiceType: true,
+      invoiceStatus: true,
+      paymentStatus: true,
+      payerCasePartyId: true,
+      invoiceDate: true,
+      subtotal: true,
+      taxRate: true,
+      taxAmount: true,
+      amountDue: true,
+      dueDate: true,
+      specialInstructions: true,
+      finalizedAt: true,
+      createdAt: true,
+      updatedAt: true,
+      payerCaseParty: {
+        select: {
+          id: true,
+          side: true,
+          partyType: true,
+          firstName: true,
+          lastName: true,
+          organizationName: true,
+          email: true,
+          phone: true,
+          streetAddress: true,
+          city: true,
+          state: true,
+          postalCode: true,
+        },
+      },
+      lineItems: {
+        select: {
+          id: true,
+          description: true,
+          secondaryDescription: true,
+          quantity: true,
+          unitPrice: true,
+          amount: true,
+          serviceDate: true,
+          referenceCode: true,
+          sourceLabel: true,
+          relatedTimesheetId: true,
+        },
+      },
+    },
+    orderBy: { createdAt: "asc" },
+  },
+  case: {
+    select: {
+      id: true,
+      caseNumber: true,
+      title: true,
+      caseType: true,
+      lifecycleStatus: true,
+      billingConfiguration: {
+        select: {
+          ...billingConfigScalarSelect,
+          payerSplits: {
+            select: {
+              id: true,
+              casePartyId: true,
+              invoiceContactEmail: true,
+              invoiceContactName: true,
+              splitPercentage: true,
+              caseParty: { select: partyContactSelect },
+            },
+          },
+        },
+      },
+      participants: {
+        where: {
+          role: { in: ["NEUTRAL", "CASE_MANAGER"] },
+          accessStatus: "ACTIVE",
+        },
+        select: {
+          id: true,
+          role: true,
+          user: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+            },
+          },
+        },
+      },
+    },
   },
 };
 
@@ -565,10 +776,17 @@ const updateIntegrationSyncLog = (id, data, tx = prisma) =>
     data,
   });
 
+const findInvoiceBatchById = (id, tx = prisma) =>
+  tx.invoiceBatch.findUnique({
+    where: { id },
+    select: invoiceBatchSelect,
+  });
+
 module.exports = {
   billingConfigSelect,
   billingConfigScalarSelect,
   invoiceSelect,
+  invoiceBatchSelect,
   findBillingConfigByCaseId,
   upsertBillingConfig,
   getBillingConfigurations,
@@ -577,6 +795,7 @@ module.exports = {
   findTimesheetsByIds,
   createInvoice,
   findInvoiceById,
+  findInvoiceBatchById,
   updateInvoice,
   deleteLineItemsByInvoiceId,
   getInvoices,

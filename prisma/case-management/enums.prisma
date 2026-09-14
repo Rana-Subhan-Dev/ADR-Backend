@@ -270,9 +270,16 @@ enum BillingExpensesPolicy {
 
 enum InvoiceType {
   DEPOSIT
-  STANDARD
+  PROGRESS
   ADMINISTRATIVE
   FINAL
+  REFUND
+}
+
+enum InvoiceAttachmentType {
+  NEUTRAL_FIRM_INVOICE
+  PLATFORM_TIMESHEETS
+  EXPENSE_RECEIPTS
 }
 
 enum InvoiceStatus {
