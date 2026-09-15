@@ -1,14 +1,15 @@
-const crypto = require("crypto");
-require("dotenv").config({ quiet: true });
 const {
   S3Client,
   DeleteObjectCommand,
   GetObjectCommand,
+  PutObjectCommand,
 } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const multer = require("multer");
 const multerS3 = require("multer-s3");
 const ApiError = require("./apiError");
+const crypto = require("crypto");
+require("dotenv").config({ quiet: true });
 
 const allowedMimeTypes = new Set([
   "application/pdf",
@@ -78,6 +79,40 @@ const getSignedDownloadUrl = async (key, expiresInSeconds = 300) => {
   return getSignedUrl(s3, command, { expiresIn: expiresInSeconds });
 };
 
+const streamToBuffer = async (stream) => {
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+};
+
+const getObjectBuffer = async (key) => {
+  const response = await s3.send(
+    new GetObjectCommand({
+      Bucket: getBucketName(),
+      Key: key,
+    }),
+  );
+  return streamToBuffer(response.Body);
+};
+
+const putObjectBuffer = async ({
+  key,
+  body,
+  contentType = "application/pdf",
+}) => {
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: getBucketName(),
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+    }),
+  );
+  return key;
+};
+
 const deleteS3Object = (key) =>
   s3.send(
     new DeleteObjectCommand({
@@ -113,6 +148,8 @@ module.exports = {
   s3,
   uploadToS3,
   getSignedDownloadUrl,
+  getObjectBuffer,
+  putObjectBuffer,
   deleteS3Object,
   deleteManyS3Objects,
   cleanupUncommittedS3Uploads,

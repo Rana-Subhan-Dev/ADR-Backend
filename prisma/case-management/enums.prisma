@@ -239,6 +239,19 @@ enum TimesheetApprovalStatus {
   REJECTED
 }
 
+enum TimesheetExpenseType {
+  TRAVEL
+  HOTEL
+  MEALS
+  OTHER
+}
+
+enum TimesheetReviewAction {
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
 enum BillingType {
   HOURLY
   FLAT

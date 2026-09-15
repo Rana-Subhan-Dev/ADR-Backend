@@ -73,6 +73,55 @@ const reviewTimesheet = respond(
       req.user,
     ),
 );
+const addExpense = respond(201, "Expense added successfully.", (req) =>
+  timesheetService.addExpense(
+    req.params.caseId,
+    req.params.timesheetId,
+    req.body,
+    req.user,
+  ),
+);
+const updateExpense = respond(200, "Expense updated successfully.", (req) =>
+  timesheetService.updateExpense(
+    req.params.caseId,
+    req.params.timesheetId,
+    req.params.expenseId,
+    req.body,
+    req.user,
+  ),
+);
+const deleteExpense = respond(200, "Expense deleted successfully.", (req) =>
+  timesheetService.deleteExpense(
+    req.params.caseId,
+    req.params.timesheetId,
+    req.params.expenseId,
+    req.user,
+  ),
+);
+const attachExpenseReceipt = respond(
+  201,
+  "Expense receipt attached successfully.",
+  (req) =>
+    timesheetService.attachExpenseReceipt(
+      req.params.caseId,
+      req.params.timesheetId,
+      req.params.expenseId,
+      req.body.documentId,
+      req.user,
+    ),
+);
+const removeExpenseReceipt = respond(
+  200,
+  "Expense receipt removed successfully.",
+  (req) =>
+    timesheetService.removeExpenseReceipt(
+      req.params.caseId,
+      req.params.timesheetId,
+      req.params.expenseId,
+      req.params.documentId,
+      req.user,
+    ),
+);
 
 module.exports = {
   createTimesheet,
@@ -82,4 +131,9 @@ module.exports = {
   deleteTimesheet,
   submitTimesheet,
   reviewTimesheet,
+  addExpense,
+  updateExpense,
+  deleteExpense,
+  attachExpenseReceipt,
+  removeExpenseReceipt,
 };

@@ -2,12 +2,20 @@ const prisma = require("../config/prisma");
 const timesheetRepository = require("../repositories/timesheet.repository");
 const caseService = require("./case.service");
 const ApiError = require("../utils/apiError");
+const { BillingExpensesPolicy } = require("@prisma/client");
 
 const managerRoles = ["SUPER_ADMIN", "ADMIN_LEADERSHIP", "CASE_MANAGER"];
 const isManager = (user) => managerRoles.includes(user.role?.name);
 const canReviewTimesheets = (user) =>
   ["SUPER_ADMIN", "ACCOUNTING_STAFF"].includes(user.role?.name);
 const canAccessFinance = (user) => isManager(user) || canReviewTimesheets(user);
+
+const ALLOWED_RECEIPT_EXTENSIONS = new Set([
+  "pdf",
+  "jpg",
+  "jpeg",
+  "png",
+]);
 
 const paginate = (timesheets, total, page, limit) => ({
   timesheets,
@@ -20,6 +28,19 @@ const paginate = (timesheets, total, page, limit) => ({
     hasPreviousPage: page > 1,
   },
 });
+
+const sumExpenses = (expenses = []) =>
+  expenses.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+
+const decorateTimesheet = (timesheet) => {
+  if (!timesheet) return timesheet;
+  const expenses = timesheet.expenses || [];
+  return {
+    ...timesheet,
+    expensesTotal: sumExpenses(expenses),
+    expenseCount: expenses.length,
+  };
+};
 
 const assertNeutral = async (caseId, userId, tx = prisma) => {
   const participant = await tx.caseParticipant.findFirst({
@@ -40,6 +61,112 @@ const assertHearing = async (caseId, hearingId, tx = prisma) => {
     throw new ApiError(400, "Hearing does not belong to this case.");
 };
 
+const getExpensesPolicy = async (caseId, tx = prisma) => {
+  const config = await tx.billingConfiguration.findUnique({
+    where: { caseId },
+    select: { expensesPolicy: true },
+  });
+  return config?.expensesPolicy || BillingExpensesPolicy.NOT_ALLOWED;
+};
+
+const assertExpensesAllowed = async (caseId, expenses, tx = prisma) => {
+  if (!expenses || expenses.length === 0) return;
+  const policy = await getExpensesPolicy(caseId, tx);
+  if (
+    policy === BillingExpensesPolicy.NOT_ALLOWED ||
+    policy == null
+  ) {
+    throw new ApiError(
+      400,
+      "Expenses are not allowed for this case billing configuration.",
+    );
+  }
+};
+
+const assertReceiptDocuments = async (
+  caseId,
+  documentIds,
+  tx = prisma,
+) => {
+  const ids = [...new Set((documentIds || []).filter(Boolean))];
+  if (ids.length === 0) return;
+
+  const documents = await tx.document.findMany({
+    where: {
+      id: { in: ids },
+      caseId,
+      deletedAt: null,
+    },
+    select: {
+      id: true,
+      name: true,
+      currentVersion: { select: { mimeType: true } },
+    },
+  });
+
+  if (documents.length !== ids.length) {
+    throw new ApiError(
+      400,
+      "One or more receipt documents are invalid or do not belong to this case.",
+    );
+  }
+
+  for (const doc of documents) {
+    const fileName = doc.name || "";
+    const ext = fileName.includes(".")
+      ? fileName.split(".").pop().toLowerCase()
+      : "";
+    const mime = (doc.currentVersion?.mimeType || "").toLowerCase();
+    const okExt = ALLOWED_RECEIPT_EXTENSIONS.has(ext);
+    const okMime =
+      mime.startsWith("image/jpeg") ||
+      mime.startsWith("image/png") ||
+      mime === "application/pdf" ||
+      mime === "image/jpg";
+    if (!okExt && !okMime) {
+      throw new ApiError(
+        400,
+        `Receipt "${doc.name}" must be PDF, JPG, or PNG.`,
+      );
+    }
+  }
+};
+
+const createExpenseWithReceipts = async (timesheetId, expense, tx) => {
+  const created = await timesheetRepository.createExpense(
+    {
+      timesheetId,
+      expenseType: expense.expenseType,
+      expenseDate: new Date(expense.expenseDate),
+      amount: expense.amount,
+      description: expense.description || null,
+    },
+    tx,
+  );
+
+  const receiptIds = expense.receiptDocumentIds || [];
+  for (const documentId of receiptIds) {
+    await timesheetRepository.createExpenseReceipt(
+      { expenseId: created.id, documentId },
+      tx,
+    );
+  }
+
+  return timesheetRepository.findExpenseById(created.id, tx);
+};
+
+const replaceExpenses = async (timesheetId, caseId, expenses, tx) => {
+  await assertExpensesAllowed(caseId, expenses, tx);
+  const allReceiptIds = (expenses || []).flatMap(
+    (row) => row.receiptDocumentIds || [],
+  );
+  await assertReceiptDocuments(caseId, allReceiptIds, tx);
+  await timesheetRepository.deleteExpensesForTimesheet(timesheetId, tx);
+  for (const expense of expenses || []) {
+    await createExpenseWithReceipts(timesheetId, expense, tx);
+  }
+};
+
 const getTimesheet = async (caseId, timesheetId, currentUser) => {
   await caseService.getCaseById(caseId, currentUser);
   const timesheet = await timesheetRepository.findById(timesheetId);
@@ -50,7 +177,7 @@ const getTimesheet = async (caseId, timesheetId, currentUser) => {
     timesheet.neutralUserId !== currentUser.id
   )
     throw new ApiError(403, "You do not have access to this timesheet entry.");
-  return timesheet;
+  return decorateTimesheet(timesheet);
 };
 
 const writeAudit = (
@@ -95,6 +222,27 @@ const writeTimeline = (
     },
   });
 
+const writeReviewHistory = (tx, timesheetId, action, actorUserId, comment) =>
+  timesheetRepository.createReviewHistory(
+    {
+      timesheetId,
+      action,
+      actorUserId,
+      comment: comment || null,
+    },
+    tx,
+  );
+
+const assertDraftEditable = (timesheet, currentUser) => {
+  if (timesheet.status !== "DRAFT")
+    throw new ApiError(400, "Only draft timesheet entries can be updated.");
+  if (!isManager(currentUser) && timesheet.neutralUserId !== currentUser.id)
+    throw new ApiError(
+      403,
+      "You do not have permission to update this timesheet entry.",
+    );
+};
+
 const createTimesheet = async (caseId, data, currentUser) => {
   await caseService.getCaseById(caseId, currentUser);
   const neutralUserId =
@@ -103,6 +251,8 @@ const createTimesheet = async (caseId, data, currentUser) => {
       : currentUser.id;
   await assertNeutral(caseId, neutralUserId);
   await assertHearing(caseId, data.hearingId);
+  await assertExpensesAllowed(caseId, data.expenses);
+
   return prisma.$transaction(async (tx) => {
     const timesheet = await timesheetRepository.create(
       {
@@ -112,16 +262,25 @@ const createTimesheet = async (caseId, data, currentUser) => {
         activityType: data.activityType,
         hours: data.hours,
         entryDate: new Date(data.entryDate),
+        billingNotes: data.billingNotes || null,
       },
       tx,
     );
+
+    if (data.expenses?.length) {
+      await replaceExpenses(timesheet.id, caseId, data.expenses, tx);
+    }
+
     await writeAudit(tx, currentUser, "CREATE", timesheet, null, {
       neutralUserId,
       activityType: timesheet.activityType,
       hours: timesheet.hours.toString(),
       entryDate: timesheet.entryDate,
+      billingNotes: timesheet.billingNotes,
+      expenseCount: data.expenses?.length || 0,
     });
-    return timesheet;
+
+    return decorateTimesheet(await timesheetRepository.findById(timesheet.id, tx));
   });
 };
 
@@ -153,29 +312,41 @@ const getTimesheets = async (caseId, query, currentUser) => {
     skip: (page - 1) * limit,
     take: limit,
   });
-  return paginate(timesheets, total, page, limit);
+  return paginate(
+    timesheets.map(decorateTimesheet),
+    total,
+    page,
+    limit,
+  );
 };
 
 const updateTimesheet = async (caseId, timesheetId, data, currentUser) => {
   const timesheet = await getTimesheet(caseId, timesheetId, currentUser);
-  if (timesheet.status !== "DRAFT")
-    throw new ApiError(400, "Only draft timesheet entries can be updated.");
-  if (!isManager(currentUser) && timesheet.neutralUserId !== currentUser.id)
-    throw new ApiError(
-      403,
-      "You do not have permission to update this timesheet entry.",
-    );
+  assertDraftEditable(timesheet, currentUser);
   await assertHearing(caseId, data.hearingId);
+  if (data.expenses) await assertExpensesAllowed(caseId, data.expenses);
+
   return prisma.$transaction(async (tx) => {
     const updated = await timesheetRepository.update(
       timesheetId,
       {
-        ...data,
+        ...(data.hearingId !== undefined && { hearingId: data.hearingId }),
+        ...(data.activityType !== undefined && {
+          activityType: data.activityType,
+        }),
+        ...(data.hours !== undefined && { hours: data.hours }),
         ...(data.entryDate && { entryDate: new Date(data.entryDate) }),
-        ...(data.hearingId === null && { hearingId: null }),
+        ...(data.billingNotes !== undefined && {
+          billingNotes: data.billingNotes || null,
+        }),
       },
       tx,
     );
+
+    if (data.expenses) {
+      await replaceExpenses(timesheetId, caseId, data.expenses, tx);
+    }
+
     await writeAudit(
       tx,
       currentUser,
@@ -184,17 +355,20 @@ const updateTimesheet = async (caseId, timesheetId, data, currentUser) => {
       {
         hearingId: timesheet.hearingId,
         activityType: timesheet.activityType,
-        hours: timesheet.hours.toString(),
+        hours: String(timesheet.hours),
         entryDate: timesheet.entryDate,
+        billingNotes: timesheet.billingNotes,
       },
       {
         hearingId: updated.hearingId,
         activityType: updated.activityType,
         hours: updated.hours.toString(),
         entryDate: updated.entryDate,
+        billingNotes: updated.billingNotes,
       },
     );
-    return updated;
+
+    return decorateTimesheet(await timesheetRepository.findById(timesheetId, tx));
   });
 };
 
@@ -216,7 +390,7 @@ const deleteTimesheet = async (caseId, timesheetId, currentUser) => {
       },
       null,
     );
-    return deleted;
+    return decorateTimesheet(deleted);
   });
 };
 
@@ -229,6 +403,11 @@ const submitTimesheet = async (caseId, timesheetId, currentUser) => {
     );
   if (timesheet.status !== "DRAFT")
     throw new ApiError(400, "Only draft timesheet entries can be submitted.");
+
+  if (timesheet.expenses?.length) {
+    await assertExpensesAllowed(caseId, timesheet.expenses);
+  }
+
   return prisma.$transaction(async (tx) => {
     const updated = await timesheetRepository.update(
       timesheetId,
@@ -236,16 +415,20 @@ const submitTimesheet = async (caseId, timesheetId, currentUser) => {
         status: "SUBMITTED",
         approvalStatus: "PENDING",
         rejectionComment: null,
+        rejectedByUserId: null,
+        submittedAt: new Date(),
+        reviewedAt: null,
       },
       tx,
     );
+    await writeReviewHistory(tx, timesheetId, "SUBMITTED", currentUser.id, null);
     await writeTimeline(
       tx,
       updated,
       currentUser,
       "Timesheet entry submitted.",
-      { status: timesheet.status },
-      { status: updated.status },
+      { status: timesheet.status, approvalStatus: timesheet.approvalStatus },
+      { status: updated.status, approvalStatus: updated.approvalStatus },
     );
     await writeAudit(
       tx,
@@ -255,7 +438,7 @@ const submitTimesheet = async (caseId, timesheetId, currentUser) => {
       { status: timesheet.status },
       { status: updated.status },
     );
-    return updated;
+    return decorateTimesheet(await timesheetRepository.findById(timesheetId, tx));
   });
 };
 
@@ -280,11 +463,28 @@ const reviewTimesheet = async (caseId, timesheetId, data, currentUser) => {
       timesheetId,
       {
         approvalStatus: data.approvalStatus,
-        approvedByUserId: approved ? currentUser.id : null,
-        rejectionComment: approved ? null : data.rejectionComment,
-        ...(!approved && { status: "DRAFT" }),
+        reviewedAt: new Date(),
+        ...(approved
+          ? {
+              approvedByUserId: currentUser.id,
+              rejectedByUserId: null,
+              rejectionComment: null,
+            }
+          : {
+              approvedByUserId: null,
+              rejectedByUserId: currentUser.id,
+              rejectionComment: data.rejectionComment,
+              status: "DRAFT",
+            }),
       },
       tx,
+    );
+    await writeReviewHistory(
+      tx,
+      timesheetId,
+      approved ? "APPROVED" : "REJECTED",
+      currentUser.id,
+      approved ? null : data.rejectionComment,
     );
     const label = approved ? "approved" : "rejected";
     await writeTimeline(
@@ -303,8 +503,136 @@ const reviewTimesheet = async (caseId, timesheetId, data, currentUser) => {
       { status: timesheet.status, approvalStatus: timesheet.approvalStatus },
       { status: updated.status, approvalStatus: updated.approvalStatus },
     );
-    return updated;
+    return decorateTimesheet(await timesheetRepository.findById(timesheetId, tx));
   });
+};
+
+const addExpense = async (caseId, timesheetId, data, currentUser) => {
+  const timesheet = await getTimesheet(caseId, timesheetId, currentUser);
+  assertDraftEditable(timesheet, currentUser);
+  await assertExpensesAllowed(caseId, [data]);
+  await assertReceiptDocuments(caseId, data.receiptDocumentIds);
+
+  return prisma.$transaction(async (tx) => {
+    const expense = await createExpenseWithReceipts(timesheetId, data, tx);
+    await writeAudit(tx, currentUser, "EDIT", timesheet, null, {
+      addedExpenseId: expense.id,
+      amount: String(expense.amount),
+    });
+    return expense;
+  });
+};
+
+const updateExpense = async (
+  caseId,
+  timesheetId,
+  expenseId,
+  data,
+  currentUser,
+) => {
+  const timesheet = await getTimesheet(caseId, timesheetId, currentUser);
+  assertDraftEditable(timesheet, currentUser);
+  const existing = await timesheetRepository.findExpenseById(expenseId);
+  if (!existing || existing.timesheetId !== timesheetId)
+    throw new ApiError(404, "Expense not found.");
+
+  await assertExpensesAllowed(caseId, [existing]);
+  if (data.receiptDocumentIds) {
+    await assertReceiptDocuments(caseId, data.receiptDocumentIds);
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const updated = await timesheetRepository.updateExpense(
+      expenseId,
+      {
+        ...(data.expenseType && { expenseType: data.expenseType }),
+        ...(data.expenseDate && { expenseDate: new Date(data.expenseDate) }),
+        ...(data.amount !== undefined && { amount: data.amount }),
+        ...(data.description !== undefined && {
+          description: data.description || null,
+        }),
+      },
+      tx,
+    );
+
+    if (data.receiptDocumentIds) {
+      await tx.timesheetExpenseReceipt.deleteMany({ where: { expenseId } });
+      for (const documentId of data.receiptDocumentIds) {
+        await timesheetRepository.createExpenseReceipt(
+          { expenseId, documentId },
+          tx,
+        );
+      }
+    }
+
+    await writeAudit(tx, currentUser, "EDIT", timesheet, { expenseId }, {
+      expenseId,
+      amount: String(updated.amount),
+    });
+    return timesheetRepository.findExpenseById(expenseId, tx);
+  });
+};
+
+const deleteExpense = async (caseId, timesheetId, expenseId, currentUser) => {
+  const timesheet = await getTimesheet(caseId, timesheetId, currentUser);
+  assertDraftEditable(timesheet, currentUser);
+  const existing = await timesheetRepository.findExpenseById(expenseId);
+  if (!existing || existing.timesheetId !== timesheetId)
+    throw new ApiError(404, "Expense not found.");
+
+  return prisma.$transaction(async (tx) => {
+    const deleted = await timesheetRepository.removeExpense(expenseId, tx);
+    await writeAudit(tx, currentUser, "EDIT", timesheet, { expenseId }, null);
+    return deleted;
+  });
+};
+
+const attachExpenseReceipt = async (
+  caseId,
+  timesheetId,
+  expenseId,
+  documentId,
+  currentUser,
+) => {
+  const timesheet = await getTimesheet(caseId, timesheetId, currentUser);
+  assertDraftEditable(timesheet, currentUser);
+  const existing = await timesheetRepository.findExpenseById(expenseId);
+  if (!existing || existing.timesheetId !== timesheetId)
+    throw new ApiError(404, "Expense not found.");
+  await assertExpensesAllowed(caseId, [existing]);
+  await assertReceiptDocuments(caseId, [documentId]);
+
+  try {
+    return await timesheetRepository.createExpenseReceipt({
+      expenseId,
+      documentId,
+    });
+  } catch (error) {
+    if (error.code === "P2002") {
+      throw new ApiError(400, "Receipt is already attached to this expense.");
+    }
+    throw error;
+  }
+};
+
+const removeExpenseReceipt = async (
+  caseId,
+  timesheetId,
+  expenseId,
+  documentId,
+  currentUser,
+) => {
+  const timesheet = await getTimesheet(caseId, timesheetId, currentUser);
+  assertDraftEditable(timesheet, currentUser);
+  const existing = await timesheetRepository.findExpenseById(expenseId);
+  if (!existing || existing.timesheetId !== timesheetId)
+    throw new ApiError(404, "Expense not found.");
+
+  const linked = existing.receipts?.some((r) => r.documentId === documentId);
+  if (!linked) throw new ApiError(404, "Receipt not found on this expense.");
+
+  await timesheetRepository.removeExpenseReceipt(expenseId, documentId);
+  return { expenseId, documentId, removed: true };
 };
 
 module.exports = {
@@ -315,4 +643,11 @@ module.exports = {
   deleteTimesheet,
   submitTimesheet,
   reviewTimesheet,
+  addExpense,
+  updateExpense,
+  deleteExpense,
+  attachExpenseReceipt,
+  removeExpenseReceipt,
+  getExpensesPolicy,
+  sumExpenses,
 };

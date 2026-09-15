@@ -12,6 +12,7 @@ const {
   IntegrationType,
   CaseTimelineEventType,
   BillingInputSource,
+  BillingExpensesPolicy,
 } = require("@prisma/client");
 
 const allowedBillingRoles = [
@@ -546,6 +547,10 @@ const getApprovedTimesheets = async (query, currentUser) => {
     }
     return {
       ...ts,
+      expensesTotal: (ts.expenses || []).reduce(
+        (sum, row) => sum + Number(row.amount || 0),
+        0,
+      ),
       associationStatus,
       activeInvoice,
     };
@@ -743,6 +748,7 @@ const generateDraftInvoice = async (payload, currentUser) => {
         },
         include: {
           neutral: true,
+          expenses: true,
           lineItems: {
             include: { invoice: true },
           },
@@ -754,6 +760,21 @@ const generateDraftInvoice = async (payload, currentUser) => {
         throw new ApiError(
           400,
           "One or more timesheets are invalid, unapproved, or not found.",
+        );
+      }
+
+      const expensesPolicy =
+        billingConfig?.expensesPolicy || BillingExpensesPolicy.NOT_ALLOWED;
+      const timesheetsWithExpenses = timesheets.filter(
+        (ts) => (ts.expenses || []).length > 0,
+      );
+      if (
+        timesheetsWithExpenses.length > 0 &&
+        expensesPolicy === BillingExpensesPolicy.NOT_ALLOWED
+      ) {
+        throw new ApiError(
+          400,
+          "Selected timesheets include expenses, but expenses are not allowed for this case.",
         );
       }
 
@@ -782,7 +803,9 @@ const generateDraftInvoice = async (payload, currentUser) => {
         const activityLabel = ts.activityType.replace(/_/g, " ");
         preparedLineItems.push({
           description: activityLabel,
-          secondaryDescription: `${ts.neutral?.firstName || "Neutral"} ${ts.neutral?.lastName || ""}`.trim(),
+          secondaryDescription:
+            ts.billingNotes ||
+            `${ts.neutral?.firstName || "Neutral"} ${ts.neutral?.lastName || ""}`.trim(),
           quantity: hours,
           unitPrice: rate,
           amount: itemAmount,
@@ -791,6 +814,26 @@ const generateDraftInvoice = async (payload, currentUser) => {
           sourceLabel: "Neutral Fee Schedule",
           relatedTimesheetId: ts.id,
         });
+
+        if (
+          expensesPolicy !== BillingExpensesPolicy.NOT_ALLOWED &&
+          (ts.expenses || []).length > 0
+        ) {
+          for (const expense of ts.expenses) {
+            const expAmount = roundMoney(Number(expense.amount));
+            preparedLineItems.push({
+              description: `Expense — ${String(expense.expenseType).replace(/_/g, " ")}`,
+              secondaryDescription: expense.description || null,
+              quantity: 1,
+              unitPrice: expAmount,
+              amount: expAmount,
+              serviceDate: expense.expenseDate,
+              referenceCode: `EX-${expense.id.slice(0, 8).toUpperCase()}`,
+              sourceLabel: "Timesheet Expense",
+              relatedTimesheetId: ts.id,
+            });
+          }
+        }
       }
     }
 

@@ -79,7 +79,9 @@ model Document {
 
   fulfillsSubmissionRequests DocumentSubmissionRequest[] @relation("DocumentFulfillsSubmissionRequest")
   invoiceAttachments         InvoiceAttachment[]
-  signedForEnvelopes         DocuSignEnvelope[]
+  signedForEnvelopes         DocuSignEnvelope[]          @relation("DocuSignSignedDocument")
+  sourceForEnvelopes         DocuSignEnvelope[]          @relation("DocuSignSourceDocument")
+  timesheetExpenseReceipts   TimesheetExpenseReceipt[]
 
   legacyReferenceId String?
   isMigrated        Boolean         @default(false)

@@ -556,9 +556,21 @@ const findApprovedTimesheets = async ({ where, skip, take, orderBy }) => {
         activityType: true,
         hours: true,
         entryDate: true,
+        billingNotes: true,
         status: true,
         approvalStatus: true,
+        submittedAt: true,
+        reviewedAt: true,
         createdAt: true,
+        expenses: {
+          select: {
+            id: true,
+            expenseType: true,
+            expenseDate: true,
+            amount: true,
+            description: true,
+          },
+        },
         neutral: {
           select: {
             id: true,
@@ -585,6 +597,7 @@ const findApprovedTimesheets = async ({ where, skip, take, orderBy }) => {
                 adminFeePercentage: true,
                 agreementFeePercentage: true,
                 splitBillingEnabled: true,
+                expensesPolicy: true,
               },
             },
           },

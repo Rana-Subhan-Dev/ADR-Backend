@@ -4,24 +4,39 @@ model DocuSignEnvelope {
   caseId String
   case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
-  envelopeId String                 @unique
-  templateId String?
-  status     DocuSignEnvelopeStatus @default(PENDING)
+  /// DocuSign envelope id (set after successful send to DocuSign)
+  envelopeId String? @unique
+
+  templateId   String?
+  templateName String?
+
+  status DocuSignEnvelopeStatus @default(PENDING)
 
   failureMessage     String?
   sentAt             DateTime?
   completedAt        DateTime?
   lastReminderSentAt DateTime?
+  dueDate            DateTime?
+
+  sourceDocumentId String?
+  sourceDocument   Document? @relation("DocuSignSourceDocument", fields: [sourceDocumentId], references: [id], onDelete: SetNull)
 
   signedDocumentId String?
-  signedDocument   Document? @relation(fields: [signedDocumentId], references: [id], onDelete: SetNull)
+  signedDocument   Document? @relation("DocuSignSignedDocument", fields: [signedDocumentId], references: [id], onDelete: SetNull)
+
+  sentByUserId String?
+  sentBy       User?   @relation("DocuSignEnvelopeSender", fields: [sentByUserId], references: [id], onDelete: SetNull)
 
   recipients DocuSignRecipient[]
+  events     DocuSignEnvelopeEvent[]
 
   createdAt DateTime @default(now()) @db.Timestamp(3)
   updatedAt DateTime @updatedAt @db.Timestamp(3)
 
   @@index([caseId, status])
+  @@index([sourceDocumentId])
+  @@index([signedDocumentId])
+  @@index([sentByUserId])
   @@map("docusign_envelopes")
 }
 
@@ -36,6 +51,9 @@ model DocuSignRecipient {
   email          String?
   status         DocuSignRecipientStatus @default(SENT)
   lastActivityAt DateTime?
+  /// DocuSign recipient/routing order (1-based)
+  routingOrder   Int                     @default(1)
+  docusignRecipientId String?
 
   caseParticipantId String?
   caseParticipant   CaseParticipant? @relation(fields: [caseParticipantId], references: [id], onDelete: SetNull)
@@ -47,5 +65,24 @@ model DocuSignRecipient {
   caseParty   CaseParty? @relation(fields: [casePartyId], references: [id], onDelete: SetNull)
 
   @@index([envelopeId])
+  @@index([email])
   @@map("docusign_recipients")
+}
+
+model DocuSignEnvelopeEvent {
+  id String @id @default(uuid())
+
+  envelopeId String
+  envelope   DocuSignEnvelope @relation(fields: [envelopeId], references: [id], onDelete: Cascade)
+
+  eventType  String
+  message    String?
+  actorEmail String?
+  rawPayload Json?
+  occurredAt DateTime @default(now())
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([envelopeId, occurredAt])
+  @@map("docusign_envelope_events")
 }

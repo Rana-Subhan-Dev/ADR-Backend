@@ -8,17 +8,25 @@ const respond = (status, message, handler) =>
       .status(status)
       .json(new ApiResponse(status, await handler(req), message)),
   );
-const createEnvelope = respond(
-  201,
-  "DocuSign envelope created successfully.",
-  (req) =>
-    docusignService.createEnvelope(req.params.caseId, req.body, req.user),
+
+const listTemplates = respond(
+  200,
+  "DocuSign templates fetched successfully.",
+  (req) => docusignService.listTemplates(req.params.caseId, req.user),
 );
+
+const sendEnvelope = respond(
+  201,
+  "DocuSign envelope sent successfully.",
+  (req) => docusignService.sendEnvelope(req.params.caseId, req.body, req.user),
+);
+
 const getEnvelopes = respond(
   200,
   "DocuSign envelopes fetched successfully.",
   (req) => docusignService.getEnvelopes(req.params.caseId, req.query, req.user),
 );
+
 const getEnvelope = respond(
   200,
   "DocuSign envelope fetched successfully.",
@@ -29,41 +37,88 @@ const getEnvelope = respond(
       req.user,
     ),
 );
-const updateEnvelope = respond(
+
+const remindEnvelope = respond(
   200,
-  "DocuSign envelope updated successfully.",
+  "DocuSign reminder sent successfully.",
   (req) =>
-    docusignService.updateEnvelope(
-      req.params.caseId,
-      req.params.envelopeRecordId,
-      req.body,
-      req.user,
-    ),
-);
-const queueSend = respond(202, "DocuSign send queued successfully.", (req) =>
-  docusignService.queueIntegration(
-    req.params.caseId,
-    req.params.envelopeRecordId,
-    req.user,
-    false,
-  ),
-);
-const queueReminder = respond(
-  202,
-  "DocuSign reminder queued successfully.",
-  (req) =>
-    docusignService.queueIntegration(
+    docusignService.remindEnvelope(
       req.params.caseId,
       req.params.envelopeRecordId,
       req.user,
-      true,
     ),
 );
+
+const getSignedPdf = respond(
+  200,
+  "Signed PDF download URL generated successfully.",
+  (req) =>
+    docusignService.getSignedPdfDownload(
+      req.params.caseId,
+      req.params.envelopeRecordId,
+      req.user,
+    ),
+);
+
+const getSourcePdf = respond(
+  200,
+  "Source document download URL generated successfully.",
+  (req) =>
+    docusignService.getSourcePdfDownload(
+      req.params.caseId,
+      req.params.envelopeRecordId,
+      req.user,
+    ),
+);
+
+const getSigningUrl = respond(
+  200,
+  "DocuSign signing URL generated successfully.",
+  (req) =>
+    docusignService.getRecipientSigningUrl(
+      req.params.caseId,
+      req.params.envelopeRecordId,
+      req.user,
+      req.body?.returnUrl || req.query?.returnUrl,
+    ),
+);
+
+const handleWebhook = asyncHandler(async (req, res) => {
+  const rawBody = Buffer.isBuffer(req.rawBody)
+    ? req.rawBody
+    : Buffer.isBuffer(req.body)
+      ? req.body
+      : Buffer.from(
+          typeof req.body === "string"
+            ? req.body
+            : JSON.stringify(req.body || {}),
+        );
+  let payload = {};
+  try {
+    payload = JSON.parse(rawBody.toString("utf8") || "{}");
+  } catch {
+    payload = {};
+  }
+  const signature =
+    req.get("X-DocuSign-Signature-1") ||
+    req.get("x-docusign-signature-1") ||
+    req.get("X-Authorization-Digest");
+  const result = await docusignService.handleWebhook(
+    payload,
+    rawBody,
+    signature,
+  );
+  res.status(200).json(new ApiResponse(200, result, "Webhook processed."));
+});
+
 module.exports = {
-  createEnvelope,
+  listTemplates,
+  sendEnvelope,
   getEnvelopes,
   getEnvelope,
-  updateEnvelope,
-  queueSend,
-  queueReminder,
+  remindEnvelope,
+  getSignedPdf,
+  getSourcePdf,
+  getSigningUrl,
+  handleWebhook,
 };

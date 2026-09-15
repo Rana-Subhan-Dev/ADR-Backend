@@ -70,6 +70,9 @@ model User {
   completedChecklistItems    ChecklistItem[]
   neutralTimesheets          NeutralTimesheet[]          @relation("NeutralTimesheetNeutral")
   approvedTimesheets         NeutralTimesheet[]          @relation("NeutralTimesheetApprover")
+  rejectedTimesheets         NeutralTimesheet[]          @relation("NeutralTimesheetRejector")
+  timesheetReviewHistory     TimesheetReviewHistory[]
+  docuSignEnvelopesSent      DocuSignEnvelope[]          @relation("DocuSignEnvelopeSender")
   invoiceBatchesCreated      InvoiceBatch[]              @relation("InvoiceBatchCreatedBy")
   invoicesFinalized          Invoice[]                   @relation("InvoiceFinalizedBy")
   importedMigrationBatches   MigrationBatch[]

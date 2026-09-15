@@ -36,6 +36,17 @@ app.use(cors(corsOptions));
 
 app.use(morgan("dev"));
 
+const docusignWebhookRoutes = require("./routes/docusignWebhook.routes");
+app.use(
+  "/api/v1/webhooks/docusign",
+  express.raw({ type: "*/*", limit: "5mb" }),
+  (req, _res, next) => {
+    req.rawBody = req.body;
+    next();
+  },
+  docusignWebhookRoutes,
+);
+
 app.use(
   express.json({
     limit: "10mb",

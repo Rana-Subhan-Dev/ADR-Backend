@@ -16,7 +16,11 @@ const PERMISSIONS = {
       PermissionAction.VIEW,
       PermissionAction.EXPORT,
     ],
-    [PermissionModule.DOCUSIGN]: [PermissionAction.VIEW],
+    [PermissionModule.DOCUSIGN]: [
+      PermissionAction.VIEW,
+      PermissionAction.CREATE,
+      PermissionAction.EDIT,
+    ],
     [PermissionModule.REPORTS]: [
       PermissionAction.VIEW,
       PermissionAction.EXPORT,
