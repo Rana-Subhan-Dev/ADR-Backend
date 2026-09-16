@@ -113,8 +113,9 @@ enum CalendarSyncStatus {
 }
 
 enum ZoomStatus {
-  GENERATED
+  NOT_REQUIRED
   PENDING
+  CREATED
   FAILED
   MANUALLY_LINKED
 }

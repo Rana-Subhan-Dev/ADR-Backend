@@ -7,7 +7,7 @@ const {
 const PERMISSIONS = {
   [RoleName.ADMIN_LEADERSHIP]: {
     [PermissionModule.USERS]: [PermissionAction.VIEW],
-    [PermissionModule.CASES]: [PermissionAction.VIEW],
+    [PermissionModule.CASES]: [PermissionAction.VIEW, PermissionAction.EDIT],
     [PermissionModule.PARTIES]: [PermissionAction.VIEW],
     [PermissionModule.ATTORNEYS]: [PermissionAction.VIEW],
     [PermissionModule.DOCUMENTS]: [PermissionAction.VIEW],

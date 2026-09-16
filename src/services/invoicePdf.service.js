@@ -31,7 +31,6 @@ const resolveChromeExecutable = () => {
         return candidate;
       }
     } catch {
-      // ignore
     }
   }
   return null;
@@ -170,7 +169,6 @@ const generateInvoicePdf = async (invoiceId, currentUser) => {
   if (!invoice) throw new ApiError(404, "Invoice not found.");
   await caseService.getCaseById(invoice.caseId, currentUser);
 
-  // Enrich with payer splits if available on config
   if (invoice.caseId) {
     const config = await billingRepository.findBillingConfigByCaseId(
       invoice.caseId,

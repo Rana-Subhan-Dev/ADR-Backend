@@ -7,6 +7,7 @@ const attorneyLawFirmRoutes = require("./attorneyLawFirm.routes");
 const representationRoutes = require("./representation.routes");
 const participantRoutes = require("./participant.routes");
 const hearingRoutes = require("./hearing.routes");
+const hearingHubRoutes = require("./hearing.routes").hubRouter;
 const caseNoteRoutes = require("./caseNote.routes");
 const documentRoutes = require("./document.routes");
 const timelineChecklistRoutes = require("./timelineChecklist.routes");
@@ -48,6 +49,10 @@ const defaultRoutes = [
   {
     path: "/cases/:caseId/participants",
     route: participantRoutes,
+  },
+  {
+    path: "/hearings",
+    route: hearingHubRoutes,
   },
   {
     path: "/cases/:caseId/hearings",

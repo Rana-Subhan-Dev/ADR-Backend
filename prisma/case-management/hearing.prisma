@@ -17,16 +17,27 @@ model Hearing {
   startTime     DateTime?
   endTime       DateTime?
 
-  location      String?
+  location         String?
+  instructions     String? @db.Text
+  timezone         String?
+  durationMinutes  Int?
+
   hearingStatus HearingStatus @default(PENDING)
 
   calendarProvider   CalendarProvider?
   calendarEventId    String?
   calendarSyncStatus CalendarSyncStatus?
+  sendCalendarInvites Boolean @default(false)
 
-  zoomMeetingId String?
-  zoomJoinUrl   String?
-  zoomStatus    ZoomStatus?
+  autoCreateZoom            Boolean @default(false)
+  zoomMeetingId             String?
+  zoomJoinUrl               String?
+  zoomStartUrl              String?
+  zoomPasscode              String?
+  zoomStatus                ZoomStatus?
+  zoomErrorMessage          String?
+  zoomAlternateHostUserId   String?
+  zoomAlternateHost         User?   @relation("HearingZoomAlternateHost", fields: [zoomAlternateHostUserId], references: [id], onDelete: SetNull)
 
   conflictStatus         ConflictStatus @default(CLEAR)
   conflictOverrideReason String?
@@ -41,6 +52,8 @@ model Hearing {
 
   @@index([caseId, hearingDate])
   @@index([hearingDate])
+  @@index([zoomStatus])
+  @@index([hearingStatus])
   @@map("hearings")
 }
 

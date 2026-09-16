@@ -37,9 +37,15 @@ const invoicePdfStyles = `
   }
   .page {
     width: 8.5in;
-    min-height: 11in;
     padding: 0;
     position: relative;
+  }
+  .page--sheet {
+    min-height: 11in;
+  }
+  .page--flow {
+    min-height: 0;
+    height: auto;
   }
   .page-break {
     page-break-before: always;
@@ -247,15 +253,31 @@ const invoicePdfStyles = `
     font-style: italic;
   }
   .services {
-    padding: 0 36px 20px 36px;
+    padding: 0 36px 12px 36px;
+  }
+  .services--continued {
+    margin-top: 28px;
+    padding-top: 0;
   }
   .services-heading {
-    margin: 0 0 12px 0;
+    margin: 0 0 14px 0;
     font-size: 12px;
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: #0F172A;
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+  .services--continued .services-heading {
+    margin-bottom: 16px;
+  }
+  .services-continued {
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: none;
+    color: ${COLORS.mutedText};
+    font-size: 11px;
   }
   .services-header {
     display: grid;
@@ -294,6 +316,10 @@ const invoicePdfStyles = `
     vertical-align: top;
     font-size: 11px;
   }
+  table.services-table tbody tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
   table.services-table tbody tr:nth-child(even) td {
     background: #F8FAFC;
   }
@@ -307,13 +333,23 @@ const invoicePdfStyles = `
   .num { text-align: right; white-space: nowrap; }
   .num.rate { color: ${COLORS.labelText}; font-weight: 500; }
   .amount { font-weight: 700; text-align: right; color: #0F172A; }
-  .totals-card {
+  .invoice-summary {
     width: 320px;
-    margin: 12px 36px 0 auto;
+    margin: 8px 36px 28px auto;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    break-before: avoid-page;
+    page-break-before: avoid;
+  }
+  .totals-card {
+    width: 100%;
+    margin: 0;
     border: 1px solid ${COLORS.border};
     border-radius: 10px;
     overflow: hidden;
     background: ${COLORS.white};
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
   .totals-row {
     display: flex;
@@ -347,8 +383,8 @@ const invoicePdfStyles = `
     font-family: ${FONT_MONO};
   }
   .due-bar {
-    margin: 14px 36px 28px auto;
-    width: 320px;
+    margin: 14px 0 0 0;
+    width: 100%;
     background: ${COLORS.dueBar};
     color: ${COLORS.dueBarText};
     border-radius: 8px;
@@ -358,6 +394,8 @@ const invoicePdfStyles = `
     display: flex;
     align-items: center;
     gap: 8px;
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
   .due-bar-icon {
     width: 14px;
@@ -568,17 +606,6 @@ const invoicePdfStyles = `
     text-align: center;
     color: ${COLORS.mutedText};
     font-size: 9px;
-  }
-  .draft-watermark {
-    position: fixed;
-    top: 45%;
-    left: 15%;
-    font-size: 96px;
-    color: rgba(26, 43, 72, 0.08);
-    transform: rotate(-28deg);
-    font-weight: 700;
-    z-index: 0;
-    pointer-events: none;
   }
 `;
 

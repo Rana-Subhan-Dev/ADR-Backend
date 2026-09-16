@@ -6,6 +6,12 @@ const {
   renderLogoMark,
 } = require("./baseLayout");
 
+const PAGE_HEIGHT_PX = 1056;
+const PAGE1_FIXED_PX = 580;
+const CONTINUED_FIXED_PX = 170;
+const SUMMARY_BLOCK_PX = 180;
+const PAGE_BOTTOM_PAD_PX = 40;
+
 const partyDisplayName = (party) => {
   if (!party) return "—";
   if (party.organizationName) return party.organizationName;
@@ -31,17 +37,94 @@ const statusLabel = (invoice) => {
   return invoice.invoiceStatus;
 };
 
-const renderInvoicePage1 = (view) => {
-  const {
-    company,
-    invoice,
-    billTo,
-    matter,
-    lineItems,
-    isDraft,
-  } = view;
+const estimateRowHeightPx = (item) => {
+  let height = 44;
+  if (item?.secondaryDescription) height += 16;
+  if ((item?.description || "").length > 70) height += 14;
+  return height;
+};
 
-  const rows = (lineItems || [])
+const paginateLineItems = (lineItems = []) => {
+  const items = Array.isArray(lineItems) ? lineItems : [];
+  if (!items.length) {
+    return [{ items: [], showSummary: true, isFirst: true }];
+  }
+
+  const pages = [];
+  let index = 0;
+  let isFirst = true;
+
+  while (index < items.length) {
+    const remaining = items.slice(index);
+    const fixed = isFirst ? PAGE1_FIXED_PX : CONTINUED_FIXED_PX;
+    const availWithSummary =
+      PAGE_HEIGHT_PX - fixed - SUMMARY_BLOCK_PX - PAGE_BOTTOM_PAD_PX;
+    const availWithoutSummary = PAGE_HEIGHT_PX - fixed - PAGE_BOTTOM_PAD_PX;
+
+    let height = 0;
+    let countWithSummary = 0;
+    for (const item of remaining) {
+      const rowH = estimateRowHeightPx(item);
+      if (height + rowH <= availWithSummary) {
+        height += rowH;
+        countWithSummary += 1;
+      } else break;
+    }
+
+    if (countWithSummary === remaining.length) {
+      pages.push({
+        items: remaining,
+        showSummary: true,
+        isFirst,
+      });
+      break;
+    }
+
+    height = 0;
+    let countWithout = 0;
+    for (const item of remaining) {
+      const rowH = estimateRowHeightPx(item);
+      if (height + rowH <= availWithoutSummary) {
+        height += rowH;
+        countWithout += 1;
+      } else break;
+    }
+    countWithout = Math.max(1, countWithout);
+    if (countWithout >= remaining.length) {
+      countWithout = Math.max(1, countWithSummary || remaining.length - 1);
+    }
+
+    pages.push({
+      items: remaining.slice(0, countWithout),
+      showSummary: false,
+      isFirst,
+    });
+    index += countWithout;
+    isFirst = false;
+  }
+
+  if (pages.length && !pages[pages.length - 1].showSummary) {
+    pages[pages.length - 1].showSummary = true;
+  }
+
+  return pages;
+};
+
+const renderContinuedHeader = ({ company, invoice, matter }) => `
+  <header class="continued-header">
+    <div class="brand-row brand-row--center">
+      ${renderLogoMark({ className: "logo-mark logo-mark--sm" })}
+      <p class="brand-name">${escapeHtml(company.legalName)}</p>
+    </div>
+    <div class="continued-meta">
+      <span class="continued-invoice">${escapeHtml(invoice.invoiceNumber)}</span>
+      <span class="continued-sep">·</span>
+      <span class="continued-case">${escapeHtml(matter.caseNumber)} — Continued</span>
+    </div>
+  </header>`;
+
+const renderLineItemRows = (lineItems) =>
+  (lineItems || [])
     .map((item) => {
       const isFlatFee =
         Number(item.quantity) === 1 && !item.relatedTimesheetId;
@@ -71,9 +154,68 @@ const renderInvoicePage1 = (view) => {
     })
     .join("");
 
+const renderServicesTable = (lineItems, { showHeading }) => `
+  <div class="services${showHeading ? "" : " services--continued"}">
+    ${
+      showHeading
+        ? `<h2 class="services-heading">Services Rendered</h2>`
+        : `<h2 class="services-heading">Services Rendered <span class="services-continued">(continued)</span></h2>`
+    }
+    <div class="services-header" aria-hidden="true">
+      <span>Ref.</span>
+      <span>Date</span>
+      <span>Description</span>
+      <span class="num">Hrs</span>
+      <span class="num">Rate</span>
+      <span class="num">Amount</span>
+    </div>
+    <table class="services-table">
+      <colgroup>
+        <col class="col-ref" />
+        <col class="col-date" />
+        <col class="col-desc" />
+        <col class="col-hrs" />
+        <col class="col-rate" />
+        <col class="col-amount" />
+      </colgroup>
+      <tbody>
+        ${
+          renderLineItemRows(lineItems) ||
+          `<tr><td colspan="6">No line items</td></tr>`
+        }
+      </tbody>
+    </table>
+  </div>`;
+
+const renderInvoiceSummary = (invoice) => `
+  <div class="invoice-summary">
+    <div class="totals-card">
+      <div class="totals-row">
+        <span>Subtotal</span>
+        <strong>${escapeHtml(formatMoney(invoice.subtotal))}</strong>
+      </div>
+      <div class="totals-row">
+        <span>Tax (${escapeHtml(Number(invoice.taxRate || 0).toFixed(2))}%)</span>
+        <strong>${escapeHtml(formatMoney(invoice.taxAmount))}</strong>
+      </div>
+      <div class="totals-due">
+        <span>TOTAL DUE</span>
+        <span class="totals-due-amount">${escapeHtml(formatMoney(invoice.amountDue))}</span>
+      </div>
+    </div>
+    <div class="due-bar">
+      <svg class="due-bar-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <line x1="8" y1="7.2" x2="8" y2="11.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <circle cx="8" cy="5" r="0.9" fill="currentColor"/>
+      </svg>
+      <span>Payment due by <strong>${escapeHtml(formatDate(invoice.dueDate))}</strong></span>
+    </div>
+  </div>`;
+
+const renderFirstPageChrome = (view) => {
+  const { company, invoice, billTo, matter } = view;
   return `
-  <section class="page">
-    ${isDraft ? '<div class="draft-watermark">DRAFT</div>' : ""}
     <header class="header">
       <div class="brand-block">
         <div class="brand-row">
@@ -170,56 +312,35 @@ const renderInvoicePage1 = (view) => {
         <p class="matter-value">${escapeHtml(matter.neutralName)}</p>
         <p class="matter-sub">${escapeHtml(matter.neutralRole)}</p>
       </div>
-    </div>
-
-    <div class="services">
-      <h2 class="services-heading">Services Rendered</h2>
-      <div class="services-header" aria-hidden="true">
-        <span>Ref.</span>
-        <span>Date</span>
-        <span>Description</span>
-        <span class="num">Hrs</span>
-        <span class="num">Rate</span>
-        <span class="num">Amount</span>
-      </div>
-      <table class="services-table">
-        <colgroup>
-          <col class="col-ref" />
-          <col class="col-date" />
-          <col class="col-desc" />
-          <col class="col-hrs" />
-          <col class="col-rate" />
-          <col class="col-amount" />
-        </colgroup>
-        <tbody>
-          ${rows || `<tr><td colspan="6">No line items</td></tr>`}
-        </tbody>
-      </table>
-    </div>
-
-    <div class="totals-card">
-      <div class="totals-row">
-        <span>Subtotal</span>
-        <strong>${escapeHtml(formatMoney(invoice.subtotal))}</strong>
-      </div>
-      <div class="totals-row">
-        <span>Tax (${escapeHtml(Number(invoice.taxRate || 0).toFixed(2))}%)</span>
-        <strong>${escapeHtml(formatMoney(invoice.taxAmount))}</strong>
-      </div>
-      <div class="totals-due">
-        <span>TOTAL DUE</span>
-        <span class="totals-due-amount">${escapeHtml(formatMoney(invoice.amountDue))}</span>
-      </div>
-    </div>
-    <div class="due-bar">
-      <svg class="due-bar-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-        <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.4"/>
-        <line x1="8" y1="7.2" x2="8" y2="11.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        <circle cx="8" cy="5" r="0.9" fill="currentColor"/>
-      </svg>
-      <span>Payment due by <strong>${escapeHtml(formatDate(invoice.dueDate))}</strong></span>
-    </div>
-  </section>`;
+    </div>`;
 };
 
-module.exports = { renderInvoicePage1 };
+const renderInvoiceContentPages = (view) => {
+  const { company, invoice, matter, lineItems } = view;
+  const pages = paginateLineItems(lineItems);
+
+  return pages
+    .map((page, pageIndex) => {
+      const pageBreakClass = pageIndex === 0 ? "" : " page-break";
+      const header = page.isFirst
+        ? renderFirstPageChrome(view)
+        : renderContinuedHeader({ company, invoice, matter });
+
+      return `
+  <section class="page page--sheet${pageBreakClass}">
+    ${header}
+    ${renderServicesTable(page.items, { showHeading: page.isFirst })}
+    ${page.showSummary ? renderInvoiceSummary(invoice) : ""}
+  </section>`;
+    })
+    .join("\n");
+};
+
+const renderInvoicePage1 = (view) => renderInvoiceContentPages(view);
+
+module.exports = {
+  renderInvoicePage1,
+  renderInvoiceContentPages,
+  renderContinuedHeader,
+  paginateLineItems,
+};

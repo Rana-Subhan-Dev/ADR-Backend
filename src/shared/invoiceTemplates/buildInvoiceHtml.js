@@ -1,5 +1,8 @@
 const { invoicePdfStyles } = require("./invoicePdfStyles");
-const { renderInvoicePage1 } = require("./invoicePage1");
+const {
+  renderInvoiceContentPages,
+  renderInvoicePage1,
+} = require("./invoicePage1");
 const { renderInvoicePage2 } = require("./invoicePage2");
 
 const buildInvoiceHtml = (view) => `<!DOCTYPE html>
@@ -16,7 +19,7 @@ const buildInvoiceHtml = (view) => `<!DOCTYPE html>
     <style>${invoicePdfStyles}</style>
   </head>
   <body>
-    ${renderInvoicePage1(view)}
+    ${renderInvoiceContentPages(view)}
     ${renderInvoicePage2(view)}
   </body>
 </html>`;
@@ -24,5 +27,6 @@ const buildInvoiceHtml = (view) => `<!DOCTYPE html>
 module.exports = {
   buildInvoiceHtml,
   renderInvoicePage1,
+  renderInvoiceContentPages,
   renderInvoicePage2,
 };

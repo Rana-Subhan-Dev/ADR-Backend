@@ -62,6 +62,17 @@ const getHearings = asyncHandler(async (req, res) =>
       ),
     ),
 );
+const listHearingsHub = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await hearingService.listHearingsHub(req.query, req.user),
+        "Hearings hub fetched successfully.",
+      ),
+    ),
+);
 const getHearing = asyncHandler(async (req, res) =>
   res
     .status(200)
@@ -125,14 +136,64 @@ const cancelHearing = asyncHandler(async (req, res) =>
       ),
     ),
 );
+const retryZoom = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await hearingService.retryZoom(
+          req.params.caseId,
+          req.params.hearingId,
+          req.user,
+        ),
+        "Zoom meeting retry completed.",
+      ),
+    ),
+);
+const setManualZoomLink = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await hearingService.setManualZoomLink(
+          req.params.caseId,
+          req.params.hearingId,
+          req.body,
+          req.user,
+        ),
+        "Manual Zoom link saved.",
+      ),
+    ),
+);
+const retryCalendarInvites = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await hearingService.retryCalendarInvites(
+          req.params.caseId,
+          req.params.hearingId,
+          req.user,
+        ),
+        "Calendar invites retry completed.",
+      ),
+    ),
+);
 
 module.exports = {
   checkAvailability,
   getAvailableSlots,
   scheduleHearing,
   getHearings,
+  listHearingsHub,
   getHearing,
   updateHearing,
   rescheduleHearing,
   cancelHearing,
+  retryZoom,
+  setManualZoomLink,
+  retryCalendarInvites,
 };

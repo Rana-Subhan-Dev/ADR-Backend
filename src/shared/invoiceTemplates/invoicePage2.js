@@ -2,25 +2,15 @@ const {
   escapeHtml,
   formatDate,
   formatDateShort,
-  renderLogoMark,
 } = require("./baseLayout");
+const { renderContinuedHeader } = require("./invoicePage1");
 
 const renderInvoicePage2 = (view) => {
   const { company, invoice, matter, authorizedBy, generatedAt, isDraft } = view;
 
   return `
-  <section class="page page-break">
-    <header class="continued-header">
-      <div class="brand-row brand-row--center">
-        ${renderLogoMark({ className: "logo-mark logo-mark--sm" })}
-        <p class="brand-name">${escapeHtml(company.legalName)}</p>
-      </div>
-      <div class="continued-meta">
-        <span class="continued-invoice">${escapeHtml(invoice.invoiceNumber)}</span>
-        <span class="continued-sep">·</span>
-        <span class="continued-case">${escapeHtml(matter.caseNumber)} — Continued</span>
-      </div>
-    </header>
+  <section class="page page--sheet page-break">
+    ${renderContinuedHeader({ company, invoice, matter })}
 
     <div class="section-block">
       <h2 class="section-heading">Payment Instructions</h2>

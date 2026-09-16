@@ -76,6 +76,7 @@ model User {
   invoiceBatchesCreated      InvoiceBatch[]              @relation("InvoiceBatchCreatedBy")
   invoicesFinalized          Invoice[]                   @relation("InvoiceFinalizedBy")
   importedMigrationBatches   MigrationBatch[]
+  zoomAlternateHostHearings  Hearing[]                   @relation("HearingZoomAlternateHost")
 
   createdAt DateTime @default(now()) @db.Timestamp(3)
   updatedAt DateTime @updatedAt @db.Timestamp(3)
