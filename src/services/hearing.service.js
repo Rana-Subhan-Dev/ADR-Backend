@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const prisma = require("../config/prisma");
+const { runTransaction } = require("../config/prisma");
 const hearingRepository = require("../repositories/hearing.repository");
 const caseService = require("./case.service");
 const zoomClient = require("./zoomClient.service");
@@ -356,7 +357,7 @@ const scheduleHearing = async (caseId, data, currentUser) => {
       ["VIRTUAL", "HYBRID"].includes(data.format));
   const sendCalendarInvites = data.sendCalendarInvites === true;
 
-  const hearing = await prisma.$transaction(
+  const hearing = await runTransaction(
     async (tx) => {
       const availability = await checkAvailability(
         caseId,
@@ -456,7 +457,7 @@ const scheduleHearing = async (caseId, data, currentUser) => {
       alternateHostEmail,
     });
     updated = await hearingRepository.updateHearing(hearing.id, zoomFields);
-    await prisma.$transaction(async (tx) => {
+    await runTransaction(async (tx) => {
       await recordEvent(tx, {
         caseId,
         hearingId: hearing.id,
@@ -480,7 +481,7 @@ const scheduleHearing = async (caseId, data, currentUser) => {
     const calendarFields = await applyCalendarInvites(fresh, "REQUEST");
     updated = await hearingRepository.updateHearing(updated.id, calendarFields);
     if (calendarFields.calendarSyncStatus === "SYNCED") {
-      await prisma.$transaction(async (tx) => {
+      await runTransaction(async (tx) => {
         await recordEvent(tx, {
           caseId,
           hearingId: updated.id,
@@ -630,7 +631,7 @@ const rescheduleHearing = async (caseId, hearingId, data, currentUser) => {
     data.sendCalendarInvites === true ||
     (data.sendCalendarInvites !== false && hearing.sendCalendarInvites);
 
-  const updated = await prisma.$transaction(
+  const updated = await runTransaction(
     async (tx) => {
       const availability = await checkAvailability(
         caseId,
@@ -761,7 +762,7 @@ const rescheduleHearing = async (caseId, hearingId, data, currentUser) => {
     const calendarFields = await applyCalendarInvites(fresh, "REQUEST");
     result = await hearingRepository.updateHearing(result.id, calendarFields);
     if (calendarFields.calendarSyncStatus === "SYNCED") {
-      await prisma.$transaction(async (tx) => {
+      await runTransaction(async (tx) => {
         await recordEvent(tx, {
           caseId,
           hearingId: result.id,
@@ -802,7 +803,7 @@ const cancelHearing = async (caseId, hearingId, reason, currentUser) => {
     });
   }
 
-  const updated = await prisma.$transaction(
+  const updated = await runTransaction(
     async (tx) => {
       const next = await hearingRepository.updateHearing(
         hearingId,
@@ -867,7 +868,7 @@ const retryZoom = async (caseId, hearingId, currentUser) => {
   );
   const updated = await hearingRepository.updateHearing(hearingId, zoomFields);
 
-  await prisma.$transaction(async (tx) => {
+  await runTransaction(async (tx) => {
     await recordEvent(tx, {
       caseId,
       hearingId,
@@ -907,7 +908,7 @@ const setManualZoomLink = async (caseId, hearingId, data, currentUser) => {
     autoCreateZoom: false,
   });
 
-  await prisma.$transaction(async (tx) => {
+  await runTransaction(async (tx) => {
     await recordEvent(tx, {
       caseId,
       hearingId,
@@ -940,7 +941,7 @@ const retryCalendarInvites = async (caseId, hearingId, currentUser) => {
   });
 
   if (calendarFields.calendarSyncStatus === "SYNCED") {
-    await prisma.$transaction(async (tx) => {
+    await runTransaction(async (tx) => {
       await recordEvent(tx, {
         caseId,
         hearingId,

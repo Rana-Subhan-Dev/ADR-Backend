@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const prisma = require("../config/prisma");
+const { runTransaction } = require("../config/prisma");
 const docusignRepository = require("../repositories/docusign.repository");
 const caseService = require("./case.service");
 const docusignClient = require("./docusignClient.service");
@@ -282,7 +283,7 @@ const sendEnvelope = async (caseId, data, currentUser) => {
   if (!docusignEnvelopeId)
     throw new ApiError(502, "DocuSign did not return an envelope id.");
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const envelope = await docusignRepository.create(
       {
         caseId,
@@ -367,7 +368,7 @@ const remindEnvelope = async (caseId, envelopeRecordId, currentUser) => {
 
   await docusignClient.sendEnvelopeReminder(envelope.envelopeId);
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const updated = await docusignRepository.update(
       envelopeRecordId,
       { lastReminderSentAt: new Date() },
@@ -508,7 +509,7 @@ const storeSignedPdf = async (envelope, pdfBuffer, actorUserId) => {
     contentType: "application/pdf",
   });
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const document = await tx.document.create({
       data: {
         caseId: envelope.caseId,
@@ -592,7 +593,7 @@ const handleWebhook = async (payload, rawBody, signatureHeader) => {
     }
   }
 
-  await prisma.$transaction(async (tx) => {
+  await runTransaction(async (tx) => {
     const updateData = {
       ...(mappedStatus && { status: mappedStatus }),
       ...(failureMessage !== undefined && { failureMessage }),
@@ -638,7 +639,7 @@ const handleWebhook = async (payload, rawBody, signatureHeader) => {
         pdfBuffer,
         envelope.sentByUserId,
       );
-      await prisma.$transaction(async (tx) => {
+      await runTransaction(async (tx) => {
         await docusignRepository.update(
           envelope.id,
           { signedDocumentId, status: "COMPLETED", completedAt: new Date() },

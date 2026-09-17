@@ -1,4 +1,5 @@
 const prisma = require("../config/prisma");
+const { runTransaction } = require("../config/prisma");
 const billingRepository = require("../repositories/billing.repository");
 const caseService = require("./case.service");
 const ApiError = require("../utils/apiError");
@@ -315,7 +316,7 @@ const upsertCaseBillingConfig = async (caseId, payload, currentUser) => {
           expensesAllowed: row.expensesAllowed || "NOT_ALLOWED",
         }));
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const previous = await tx.billingConfiguration.findUnique({
       where: { caseId },
       select: billingRepository.billingConfigSelect,
@@ -734,236 +735,244 @@ const generateDraftInvoice = async (payload, currentUser) => {
     }
   }
 
-  return prisma.$transaction(
-    async (tx) => {
-    let preparedLineItems = [];
-    const trackedHoursByBucket = { prePost: 0 };
+  let preparedLineItems = [];
+  const trackedHoursByBucket = { prePost: 0 };
 
-    if (timesheetIds.length > 0) {
-      const timesheets = await tx.neutralTimesheet.findMany({
-        where: {
-          id: { in: timesheetIds },
-          caseId,
-          approvalStatus: TimesheetApprovalStatus.APPROVED,
+  if (timesheetIds.length > 0) {
+    const timesheets = await prisma.neutralTimesheet.findMany({
+      where: {
+        id: { in: timesheetIds },
+        caseId,
+        approvalStatus: TimesheetApprovalStatus.APPROVED,
+      },
+      include: {
+        neutral: true,
+        expenses: true,
+        lineItems: {
+          include: { invoice: true },
         },
-        include: {
-          neutral: true,
-          expenses: true,
-          lineItems: {
-            include: { invoice: true },
-          },
-        },
-        orderBy: { entryDate: "asc" },
+      },
+      orderBy: { entryDate: "asc" },
+    });
+
+    if (timesheets.length !== timesheetIds.length) {
+      throw new ApiError(
+        400,
+        "One or more timesheets are invalid, unapproved, or not found.",
+      );
+    }
+
+    const expensesPolicy =
+      billingConfig?.expensesPolicy || BillingExpensesPolicy.NOT_ALLOWED;
+    const timesheetsWithExpenses = timesheets.filter(
+      (ts) => (ts.expenses || []).length > 0,
+    );
+    if (
+      timesheetsWithExpenses.length > 0 &&
+      expensesPolicy === BillingExpensesPolicy.NOT_ALLOWED
+    ) {
+      throw new ApiError(
+        400,
+        "Selected timesheets include expenses, but expenses are not allowed for this case.",
+      );
+    }
+
+    for (const ts of timesheets) {
+      const activeItem = ts.lineItems.find(
+        (li) => li.invoice?.invoiceStatus !== InvoiceStatus.VOID,
+      );
+      if (activeItem) {
+        throw new ApiError(
+          400,
+          `Timesheet ${ts.id} is already attached to invoice ${activeItem.invoice?.invoiceNumber}`,
+        );
+      }
+
+      const hours = Number(ts.hours);
+      const rate = resolveTimesheetRate(
+        ts.activityType,
+        billingConfig,
+        trackedHoursByBucket,
+      );
+      if (PRE_POST_ACTIVITY_TYPES.has(ts.activityType)) {
+        trackedHoursByBucket.prePost += hours;
+      }
+
+      const itemAmount = roundMoney(hours * rate);
+      const activityLabel = ts.activityType.replace(/_/g, " ");
+      preparedLineItems.push({
+        description: activityLabel,
+        secondaryDescription:
+          ts.billingNotes ||
+          `${ts.neutral?.firstName || "Neutral"} ${ts.neutral?.lastName || ""}`.trim(),
+        quantity: hours,
+        unitPrice: rate,
+        amount: itemAmount,
+        serviceDate: ts.entryDate,
+        referenceCode: `TS-${ts.id.slice(0, 8).toUpperCase()}`,
+        sourceLabel: "Neutral Fee Schedule",
+        relatedTimesheetId: ts.id,
       });
 
-      if (timesheets.length !== timesheetIds.length) {
-        throw new ApiError(
-          400,
-          "One or more timesheets are invalid, unapproved, or not found.",
-        );
-      }
-
-      const expensesPolicy =
-        billingConfig?.expensesPolicy || BillingExpensesPolicy.NOT_ALLOWED;
-      const timesheetsWithExpenses = timesheets.filter(
-        (ts) => (ts.expenses || []).length > 0,
-      );
       if (
-        timesheetsWithExpenses.length > 0 &&
-        expensesPolicy === BillingExpensesPolicy.NOT_ALLOWED
+        expensesPolicy !== BillingExpensesPolicy.NOT_ALLOWED &&
+        (ts.expenses || []).length > 0
       ) {
-        throw new ApiError(
-          400,
-          "Selected timesheets include expenses, but expenses are not allowed for this case.",
-        );
-      }
-
-      for (const ts of timesheets) {
-        const activeItem = ts.lineItems.find(
-          (li) => li.invoice?.invoiceStatus !== InvoiceStatus.VOID,
-        );
-        if (activeItem) {
-          throw new ApiError(
-            400,
-            `Timesheet ${ts.id} is already attached to invoice ${activeItem.invoice?.invoiceNumber}`,
-          );
-        }
-
-        const hours = Number(ts.hours);
-        const rate = resolveTimesheetRate(
-          ts.activityType,
-          billingConfig,
-          trackedHoursByBucket,
-        );
-        if (PRE_POST_ACTIVITY_TYPES.has(ts.activityType)) {
-          trackedHoursByBucket.prePost += hours;
-        }
-
-        const itemAmount = roundMoney(hours * rate);
-        const activityLabel = ts.activityType.replace(/_/g, " ");
-        preparedLineItems.push({
-          description: activityLabel,
-          secondaryDescription:
-            ts.billingNotes ||
-            `${ts.neutral?.firstName || "Neutral"} ${ts.neutral?.lastName || ""}`.trim(),
-          quantity: hours,
-          unitPrice: rate,
-          amount: itemAmount,
-          serviceDate: ts.entryDate,
-          referenceCode: `TS-${ts.id.slice(0, 8).toUpperCase()}`,
-          sourceLabel: "Neutral Fee Schedule",
-          relatedTimesheetId: ts.id,
-        });
-
-        if (
-          expensesPolicy !== BillingExpensesPolicy.NOT_ALLOWED &&
-          (ts.expenses || []).length > 0
-        ) {
-          for (const expense of ts.expenses) {
-            const expAmount = roundMoney(Number(expense.amount));
-            preparedLineItems.push({
-              description: `Expense — ${String(expense.expenseType).replace(/_/g, " ")}`,
-              secondaryDescription: expense.description || null,
-              quantity: 1,
-              unitPrice: expAmount,
-              amount: expAmount,
-              serviceDate: expense.expenseDate,
-              referenceCode: `EX-${expense.id.slice(0, 8).toUpperCase()}`,
-              sourceLabel: "Timesheet Expense",
-              relatedTimesheetId: ts.id,
-            });
-          }
+        for (const expense of ts.expenses) {
+          const expAmount = roundMoney(Number(expense.amount));
+          preparedLineItems.push({
+            description: `Expense — ${String(expense.expenseType).replace(/_/g, " ")}`,
+            secondaryDescription: expense.description || null,
+            quantity: 1,
+            unitPrice: expAmount,
+            amount: expAmount,
+            serviceDate: expense.expenseDate,
+            referenceCode: `EX-${expense.id.slice(0, 8).toUpperCase()}`,
+            sourceLabel: "Timesheet Expense",
+            relatedTimesheetId: ts.id,
+          });
         }
       }
     }
+  }
 
-    if (lineItems && lineItems.length > 0) {
-      for (const item of lineItems) {
-        const qty = Number(item.quantity || 1);
-        const unitPrice = Number(item.unitPrice);
-        const itemTotal =
-          item.amount !== undefined
-            ? Number(item.amount)
-            : roundMoney(qty * unitPrice);
-        preparedLineItems.push({
-          description: item.description,
-          secondaryDescription: emptyToNull(item.secondaryDescription),
-          quantity: qty,
-          unitPrice,
-          amount: itemTotal,
-          serviceDate: item.serviceDate ? new Date(item.serviceDate) : null,
-          referenceCode: emptyToNull(item.referenceCode),
-          sourceLabel: emptyToNull(item.sourceLabel) || "Manual Entry",
-          relatedTimesheetId: item.relatedTimesheetId || null,
-        });
-      }
-    }
-
-    if (
-      hasFirmAmount &&
-      preparedLineItems.length === 0 &&
-      inputSource === BillingInputSource.FIRM_INVOICE
-    ) {
-      const firmAmt = Number(firmInvoiceAmount);
+  if (lineItems && lineItems.length > 0) {
+    for (const item of lineItems) {
+      const qty = Number(item.quantity || 1);
+      const unitPrice = Number(item.unitPrice);
+      const itemTotal =
+        item.amount !== undefined
+          ? Number(item.amount)
+          : roundMoney(qty * unitPrice);
       preparedLineItems.push({
-        description: "Neutral / Firm Invoice",
-        secondaryDescription: firmInvoiceNumber
-          ? `Firm invoice ${firmInvoiceNumber}`
-          : null,
+        description: item.description,
+        secondaryDescription: emptyToNull(item.secondaryDescription),
+        quantity: qty,
+        unitPrice,
+        amount: itemTotal,
+        serviceDate: item.serviceDate ? new Date(item.serviceDate) : null,
+        referenceCode: emptyToNull(item.referenceCode),
+        sourceLabel: emptyToNull(item.sourceLabel) || "Manual Entry",
+        relatedTimesheetId: item.relatedTimesheetId || null,
+      });
+    }
+  }
+
+  if (
+    hasFirmAmount &&
+    preparedLineItems.length === 0 &&
+    inputSource === BillingInputSource.FIRM_INVOICE
+  ) {
+    const firmAmt = Number(firmInvoiceAmount);
+    preparedLineItems.push({
+      description: "Neutral / Firm Invoice",
+      secondaryDescription: firmInvoiceNumber
+        ? `Firm invoice ${firmInvoiceNumber}`
+        : null,
+      quantity: 1,
+      unitPrice: firmAmt,
+      amount: firmAmt,
+      serviceDate: firmInvoiceDate ? new Date(firmInvoiceDate) : null,
+      referenceCode: firmInvoiceNumber || null,
+      sourceLabel: "Firm Invoice",
+      relatedTimesheetId: null,
+    });
+    if (firmExpensesAmount && Number(firmExpensesAmount) > 0) {
+      const exp = Number(firmExpensesAmount);
+      preparedLineItems.push({
+        description: "Expenses",
+        secondaryDescription: null,
         quantity: 1,
-        unitPrice: firmAmt,
-        amount: firmAmt,
+        unitPrice: exp,
+        amount: exp,
         serviceDate: firmInvoiceDate ? new Date(firmInvoiceDate) : null,
-        referenceCode: firmInvoiceNumber || null,
+        referenceCode: null,
         sourceLabel: "Firm Invoice",
         relatedTimesheetId: null,
       });
-      if (firmExpensesAmount && Number(firmExpensesAmount) > 0) {
-        const exp = Number(firmExpensesAmount);
-        preparedLineItems.push({
-          description: "Expenses",
-          secondaryDescription: null,
-          quantity: 1,
-          unitPrice: exp,
-          amount: exp,
-          serviceDate: firmInvoiceDate ? new Date(firmInvoiceDate) : null,
-          referenceCode: null,
-          sourceLabel: "Firm Invoice",
-          relatedTimesheetId: null,
-        });
-      }
     }
+  }
 
-    let calculatedTotal = preparedLineItems.reduce(
-      (acc, curr) => acc + curr.amount,
-      0,
-    );
+  let calculatedTotal = preparedLineItems.reduce(
+    (acc, curr) => acc + curr.amount,
+    0,
+  );
 
-    if (
-      billingConfig?.setupFee &&
-      invoiceType === "DEPOSIT" &&
-      preparedLineItems.length === 0
-    ) {
-      const fee = Number(billingConfig.setupFee);
-      preparedLineItems.push({
-        description: "Initial Setup Fee",
-        secondaryDescription: null,
-        quantity: 1,
-        unitPrice: fee,
-        amount: fee,
-        serviceDate: null,
-        referenceCode: null,
-        sourceLabel: "FedArb Fee Schedule",
-        relatedTimesheetId: null,
-      });
-      calculatedTotal += fee;
-    }
+  if (
+    billingConfig?.setupFee &&
+    invoiceType === "DEPOSIT" &&
+    preparedLineItems.length === 0
+  ) {
+    const fee = Number(billingConfig.setupFee);
+    preparedLineItems.push({
+      description: "Initial Setup Fee",
+      secondaryDescription: null,
+      quantity: 1,
+      unitPrice: fee,
+      amount: fee,
+      serviceDate: null,
+      referenceCode: null,
+      sourceLabel: "FedArb Fee Schedule",
+      relatedTimesheetId: null,
+    });
+    calculatedTotal += fee;
+  }
 
-    if (
-      billingConfig?.adminFeePercentage &&
-      Number(billingConfig.adminFeePercentage) > 0 &&
-      calculatedTotal > 0 &&
-      invoiceType !== "REFUND"
-    ) {
-      const adminPct = Number(billingConfig.adminFeePercentage);
-      const adminFeeAmount = roundMoney((calculatedTotal * adminPct) / 100);
-      preparedLineItems.push({
-        description: `Admin Fee (${adminPct}%)`,
-        secondaryDescription: "FedArb client-side administration fee",
-        quantity: 1,
-        unitPrice: adminFeeAmount,
-        amount: adminFeeAmount,
-        serviceDate: null,
-        referenceCode: null,
-        sourceLabel: "FedArb Fee Schedule",
-        relatedTimesheetId: null,
-      });
-      calculatedTotal = roundMoney(calculatedTotal + adminFeeAmount);
-    } else if (
-      billingConfig?.administrationFee &&
-      Number(billingConfig.administrationFee) > 0 &&
-      invoiceType === "ADMINISTRATIVE" &&
-      preparedLineItems.length === 0
-    ) {
-      const fee = Number(billingConfig.administrationFee);
-      preparedLineItems.push({
-        description: "Administration Fee",
-        secondaryDescription: null,
-        quantity: 1,
-        unitPrice: fee,
-        amount: fee,
-        serviceDate: null,
-        referenceCode: null,
-        sourceLabel: "FedArb Fee Schedule",
-        relatedTimesheetId: null,
-      });
-      calculatedTotal += fee;
-    }
+  if (
+    billingConfig?.adminFeePercentage &&
+    Number(billingConfig.adminFeePercentage) > 0 &&
+    calculatedTotal > 0 &&
+    invoiceType !== "REFUND"
+  ) {
+    const adminPct = Number(billingConfig.adminFeePercentage);
+    const adminFeeAmount = roundMoney((calculatedTotal * adminPct) / 100);
+    preparedLineItems.push({
+      description: `Admin Fee (${adminPct}%)`,
+      secondaryDescription: "FedArb client-side administration fee",
+      quantity: 1,
+      unitPrice: adminFeeAmount,
+      amount: adminFeeAmount,
+      serviceDate: null,
+      referenceCode: null,
+      sourceLabel: "FedArb Fee Schedule",
+      relatedTimesheetId: null,
+    });
+    calculatedTotal = roundMoney(calculatedTotal + adminFeeAmount);
+  } else if (
+    billingConfig?.administrationFee &&
+    Number(billingConfig.administrationFee) > 0 &&
+    invoiceType === "ADMINISTRATIVE" &&
+    preparedLineItems.length === 0
+  ) {
+    const fee = Number(billingConfig.administrationFee);
+    preparedLineItems.push({
+      description: "Administration Fee",
+      secondaryDescription: null,
+      quantity: 1,
+      unitPrice: fee,
+      amount: fee,
+      serviceDate: null,
+      referenceCode: null,
+      sourceLabel: "FedArb Fee Schedule",
+      relatedTimesheetId: null,
+    });
+    calculatedTotal += fee;
+  }
 
-    const fullTotal =
-      manualAmountDue !== undefined ? Number(manualAmountDue) : calculatedTotal;
-    const taxRateNum = Number(taxRate || 0);
+  const fullTotal =
+    manualAmountDue !== undefined ? Number(manualAmountDue) : calculatedTotal;
+  const taxRateNum = Number(taxRate || 0);
 
+  const applySplits =
+    billingConfig?.splitBillingEnabled &&
+    billingConfig.payerSplits?.length > 0 &&
+    payerTargets.every((id) => id) &&
+    manualAmountDue === undefined;
+
+  const residualId = billingConfig?.roundingResidualCasePartyId || null;
+
+  return runTransaction(
+    async (tx) => {
     const batch = await tx.invoiceBatch.create({
       data: {
         caseId,
@@ -999,13 +1008,6 @@ const generateDraftInvoice = async (payload, currentUser) => {
       select: { id: true },
     });
 
-    const applySplits =
-      billingConfig?.splitBillingEnabled &&
-      billingConfig.payerSplits?.length > 0 &&
-      payerTargets.every((id) => id) &&
-      manualAmountDue === undefined;
-
-    const residualId = billingConfig?.roundingResidualCasePartyId || null;
     const invoiceNumbers = await generateInvoiceNumbers(tx, payerTargets.length);
     const createdInvoices = [];
     const auditRows = [];
@@ -1184,7 +1186,7 @@ const updateInvoice = async (invoiceId, payload, currentUser) => {
     throw new ApiError(400, "Only draft invoices can be edited.");
   }
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     let finalAmount =
       payload.amountDue !== undefined
         ? Number(payload.amountDue)
@@ -1256,7 +1258,7 @@ const submitInvoiceForReview = async (invoiceId, payload, currentUser) => {
     throw new ApiError(400, "Only draft invoices can be submitted for review.");
   }
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const updated = await tx.invoice.update({
       where: { id: invoiceId },
       data: {
@@ -1306,7 +1308,7 @@ const finalizeInvoice = async (invoiceId, currentUser) => {
     throw new ApiError(400, "Invoice is not in draft status.");
   }
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const updated = await tx.invoice.update({
       where: { id: invoiceId },
       data: {
@@ -1419,7 +1421,7 @@ const sendInvoice = async (invoiceId, payload, currentUser) => {
     );
   }
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const updated = await tx.invoice.update({
       where: { id: invoiceId },
       data: {
@@ -1456,7 +1458,7 @@ const voidInvoice = async (invoiceId, reason, currentUser) => {
     throw new ApiError(400, "Invoice is already void.");
   }
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const updated = await tx.invoice.update({
       where: { id: invoiceId },
       data: {
@@ -1494,7 +1496,7 @@ const reissueInvoice = async (invoiceId, payload, currentUser) => {
     throw new ApiError(400, "Only void invoices can be reissued.");
   }
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const newNumber = await generateInvoiceNumber(tx);
     const lineItemsData = existing.lineItems.map((li) => ({
       description: li.description,
@@ -1616,7 +1618,7 @@ const recordPayment = async (invoiceId, payload, currentUser) => {
     newPaymentStatus = PaymentStatus.PAID;
   }
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const payment = await tx.payment.create({
       data: {
         invoiceId,
@@ -1687,7 +1689,7 @@ const recordCreditNote = async (invoiceId, payload, currentUser) => {
     newPaymentStatus = PaymentStatus.PARTIAL;
   }
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const creditNote = await tx.creditNote.create({
       data: {
         invoiceId,
@@ -1830,7 +1832,7 @@ const syncInvoiceToQuickBooks = async (invoiceId, currentUser) => {
   if (!invoice) throw new ApiError(404, "Invoice not found.");
   await assertCanMutateCaseBilling(invoice.caseId, currentUser);
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const updated = await tx.invoice.update({
       where: { id: invoiceId },
       data: {

@@ -14,6 +14,7 @@ const timelineChecklistRoutes = require("./timelineChecklist.routes");
 const timesheetRoutes = require("./timesheet.routes");
 const docusignRoutes = require("./docusign.routes");
 const billingRoutes = require("./billing.routes");
+const adminRoutes = require("./admin.routes");
 const express = require("express");
 const router = express.Router();
 
@@ -21,6 +22,10 @@ const defaultRoutes = [
   {
     path: "/auth",
     route: authRoutes,
+  },
+  {
+    path: "/admin",
+    route: adminRoutes,
   },
   {
     path: "/users",

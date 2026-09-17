@@ -1,4 +1,5 @@
 const prisma = require("../config/prisma");
+const { runTransaction } = require("../config/prisma");
 const timesheetRepository = require("../repositories/timesheet.repository");
 const caseService = require("./case.service");
 const ApiError = require("../utils/apiError");
@@ -253,7 +254,7 @@ const createTimesheet = async (caseId, data, currentUser) => {
   await assertHearing(caseId, data.hearingId);
   await assertExpensesAllowed(caseId, data.expenses);
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const timesheet = await timesheetRepository.create(
       {
         caseId,
@@ -326,7 +327,7 @@ const updateTimesheet = async (caseId, timesheetId, data, currentUser) => {
   await assertHearing(caseId, data.hearingId);
   if (data.expenses) await assertExpensesAllowed(caseId, data.expenses);
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const updated = await timesheetRepository.update(
       timesheetId,
       {
@@ -376,7 +377,7 @@ const deleteTimesheet = async (caseId, timesheetId, currentUser) => {
   const timesheet = await getTimesheet(caseId, timesheetId, currentUser);
   if (timesheet.status !== "DRAFT")
     throw new ApiError(400, "Only draft timesheet entries can be deleted.");
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const deleted = await timesheetRepository.remove(timesheetId, tx);
     await writeAudit(
       tx,
@@ -408,7 +409,7 @@ const submitTimesheet = async (caseId, timesheetId, currentUser) => {
     await assertExpensesAllowed(caseId, timesheet.expenses);
   }
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const updated = await timesheetRepository.update(
       timesheetId,
       {
@@ -458,7 +459,7 @@ const reviewTimesheet = async (caseId, timesheetId, data, currentUser) => {
       "Only submitted pending timesheet entries can be reviewed.",
     );
   const approved = data.approvalStatus === "APPROVED";
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const updated = await timesheetRepository.update(
       timesheetId,
       {
@@ -513,7 +514,7 @@ const addExpense = async (caseId, timesheetId, data, currentUser) => {
   await assertExpensesAllowed(caseId, [data]);
   await assertReceiptDocuments(caseId, data.receiptDocumentIds);
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const expense = await createExpenseWithReceipts(timesheetId, data, tx);
     await writeAudit(tx, currentUser, "EDIT", timesheet, null, {
       addedExpenseId: expense.id,
@@ -541,7 +542,7 @@ const updateExpense = async (
     await assertReceiptDocuments(caseId, data.receiptDocumentIds);
   }
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const updated = await timesheetRepository.updateExpense(
       expenseId,
       {
@@ -580,7 +581,7 @@ const deleteExpense = async (caseId, timesheetId, expenseId, currentUser) => {
   if (!existing || existing.timesheetId !== timesheetId)
     throw new ApiError(404, "Expense not found.");
 
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const deleted = await timesheetRepository.removeExpense(expenseId, tx);
     await writeAudit(tx, currentUser, "EDIT", timesheet, { expenseId }, null);
     return deleted;

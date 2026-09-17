@@ -8,11 +8,12 @@ require("dotenv").config();
 const errorHandler = require("./middlewares/errorHandler.middleware");
 const rateLimiter = require("./middlewares/rateLimiter.middleware");
 const indexRoutes = require("./routes/index.routes");
+const { connectPrisma, pingDatabase } = require("./config/prisma");
 const app = express();
 
 app.use(helmet());
 
-const allowedOrigins = ["http://localhost:3000/"];
+const allowedOrigins = ["http://localhost:3000"];
 
 const corsOptions = {
   origin: function (origin, callback) {
@@ -55,19 +56,36 @@ app.use(
 
 app.use(cookieParser());
 
-app.get("/api/health", (req, res) => {
-  return res.status(200).json({
-    success: true,
-    message: "FEDARB API is running",
-  });
+app.get("/api/v1/health", async (req, res) => {
+  try {
+    await pingDatabase();
+    return res.status(200).json({
+      success: true,
+      message: "FEDARB API is running",
+      database: "up",
+    });
+  } catch (error) {
+    return res.status(503).json({
+      success: false,
+      message: "API is up but database is unreachable",
+      database: "down",
+    });
+  }
 });
 
+app.set('trust proxy', 1);
 app.use("/api/v1", rateLimiter, indexRoutes);
 
 app.use(errorHandler);
 
 const PORT = process.env.PORT;
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
+  const connected = await connectPrisma();
+  if (!connected) {
+    console.error(
+      "[prisma] Server started without a live database connection. Health will report database: down until connectivity is restored.",
+    );
+  }
 });
