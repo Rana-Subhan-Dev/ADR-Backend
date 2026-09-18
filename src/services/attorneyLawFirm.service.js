@@ -114,13 +114,25 @@ const createAttorney = async (data, currentUser) => {
   await getAuthorizedCaseParty(representedPartyId, caseId, currentUser);
   if (attorneyData.lawFirmId)
     await getLawFirmById(attorneyData.lawFirmId, currentUser);
-  return attorneyLawFirmRepository.createAttorneyWithRepresentation(
-    attorneyData,
-    {
-      casePartyId: representedPartyId,
-      designation,
+  const attorney =
+    await attorneyLawFirmRepository.createAttorneyWithRepresentation(
+      attorneyData,
+      {
+        casePartyId: representedPartyId,
+        designation,
+      },
+    );
+  await prisma.caseTimelineEvent.create({
+    data: {
+      caseId,
+      eventType: "ATTORNEY_ADDED",
+      relatedRecordType: "Attorney",
+      relatedRecordId: attorney.id,
+      summary: `Attorney added: ${attorney.firstName || ""} ${attorney.lastName || ""}`.trim(),
+      actorUserId: currentUser.id,
     },
-  );
+  });
+  return attorney;
 };
 
 const mapAttorneyForCase = async (attorney, caseId) => ({

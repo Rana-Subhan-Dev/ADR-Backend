@@ -106,7 +106,7 @@ const inviteParticipant = async (caseId, data, currentUser) => {
         "This email already has a pending platform invitation.",
       );
     }
-    return participantRepository.createParticipant({
+    const created = await participantRepository.createParticipant({
       userId: existingUser.id,
       caseId,
       role: data.role,
@@ -117,6 +117,17 @@ const inviteParticipant = async (caseId, data, currentUser) => {
       accessStatus: "ACTIVE",
       invitationStatus: "ACCEPTED",
     });
+    await prisma.caseTimelineEvent.create({
+      data: {
+        caseId,
+        eventType: "PARTICIPANT_INVITED",
+        relatedRecordType: "CaseParticipant",
+        relatedRecordId: created.id,
+        summary: `Participant assigned: ${email} (${data.role}).`,
+        actorUserId: currentUser.id,
+      },
+    });
+    return created;
   }
   const role = await authRepository.findRoleByName(data.role);
   if (!role) throw new ApiError(400, "Participant role is not configured.");
@@ -166,6 +177,16 @@ const inviteParticipant = async (caseId, data, currentUser) => {
     user.id,
     caseId,
   );
+  await prisma.caseTimelineEvent.create({
+    data: {
+      caseId,
+      eventType: "PARTICIPANT_INVITED",
+      relatedRecordType: "CaseParticipant",
+      relatedRecordId: participant.id,
+      summary: `Participant invited: ${email} (${data.role}).`,
+      actorUserId: currentUser.id,
+    },
+  });
   return {
     ...participant,
     ...(process.env.NODE_ENV === "development" && { invitationToken: token }),

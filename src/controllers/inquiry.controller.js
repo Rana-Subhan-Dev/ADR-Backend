@@ -35,7 +35,11 @@ const updateInquiry = asyncHandler(async (req, res) => {
 });
 
 const convertToCase = asyncHandler(async (req, res) => {
-  const result = await inquiryService.convertToCase(req.params.id, req.body);
+  const result = await inquiryService.convertToCase(
+    req.params.id,
+    req.body,
+    req.user,
+  );
 
   return res
     .status(201)

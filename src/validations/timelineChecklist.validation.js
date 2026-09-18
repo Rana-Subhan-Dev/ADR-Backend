@@ -29,22 +29,6 @@ const getTimelineSchema = Joi.object({
   })
   .messages({ "any.invalid": "to must be later than from." });
 
-const createChecklistItemSchema = Joi.object({
-  category: Joi.string()
-    .valid(...Object.values(ChecklistCategory))
-    .required(),
-  label: Joi.string().trim().min(1).max(500).required(),
-  relatedModule: Joi.string().trim().max(100).allow("", null).optional(),
-});
-
-const updateChecklistItemSchema = Joi.object({
-  category: Joi.string()
-    .valid(...Object.values(ChecklistCategory))
-    .optional(),
-  label: Joi.string().trim().min(1).max(500).optional(),
-  relatedModule: Joi.string().trim().max(100).allow("", null).optional(),
-}).min(1);
-
 const getChecklistItemsSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(100).default(20),
@@ -63,7 +47,5 @@ module.exports = {
   caseIdSchema,
   itemIdSchema,
   getTimelineSchema,
-  createChecklistItemSchema,
-  updateChecklistItemSchema,
   getChecklistItemsSchema,
 };

@@ -69,10 +69,15 @@ const resetPasswordSchema = Joi.object({
   password: passwordSchema,
 });
 
+const resendInviteParamsSchema = Joi.object({
+  userId: Joi.string().uuid().required(),
+});
+
 module.exports = {
   inviteUserSchema,
   acceptInvitationSchema,
   signInSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  resendInviteParamsSchema,
 };

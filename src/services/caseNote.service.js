@@ -91,6 +91,24 @@ const createCaseNote = async (caseId, data, currentUser) => {
       visibility: note.visibility,
       body: note.body,
     });
+    if (
+      note.noteType !== "INTERNAL_NOTE" &&
+      note.visibility === "ALL_PARTICIPANTS"
+    ) {
+      await tx.caseTimelineEvent.create({
+        data: {
+          caseId,
+          eventType: "STATUS_CHANGED",
+          relatedRecordType: "CaseNote",
+          relatedRecordId: note.id,
+          summary:
+            note.noteType === "CASE_UPDATE"
+              ? "Case outcome note added."
+              : "Shared case comment added.",
+          actorUserId: currentUser.id,
+        },
+      });
+    }
     return note;
   });
 };

@@ -9,6 +9,8 @@ const {
   adminUsersQuerySchema,
   adminCasesQuerySchema,
   adminInvoicesQuerySchema,
+  adminAuditLogsQuerySchema,
+  adminAuditLogsExportQuerySchema,
 } = require("../validations/admin.validation");
 
 const router = express.Router();
@@ -39,5 +41,19 @@ router.get(
   validate(adminInvoicesQuerySchema, "query"),
   adminController.getInvoices,
 );
+
+router.get(
+  "/audit-logs",
+  validate(adminAuditLogsQuerySchema, "query"),
+  adminController.getAuditLogs,
+);
+
+router.get(
+  "/audit-logs/export",
+  validate(adminAuditLogsExportQuerySchema, "query"),
+  adminController.exportAuditLogs,
+);
+
+router.get("/audit-logs/:id", adminController.getAuditLogById);
 
 module.exports = router;

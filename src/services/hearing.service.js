@@ -253,6 +253,7 @@ const recordEvent = async (
     eventType,
     summary,
     actorUserId,
+    actorUserRole,
     previousValue,
     newValue,
     reason,
@@ -283,6 +284,7 @@ const recordEvent = async (
   await tx.auditLog.create({
     data: {
       actingUserId: actorUserId,
+      actingUserRoleSnapshot: actorUserRole || null,
       action: eventType === "HEARING_SCHEDULED" ? "CREATE" : "EDIT",
       module: "CASES",
       affectedRecordType: "Hearing",
@@ -434,6 +436,7 @@ const scheduleHearing = async (caseId, data, currentUser) => {
         eventType: "HEARING_SCHEDULED",
         summary: `${created.title} scheduled.`,
         actorUserId: currentUser.id,
+        actorUserRole: currentUser.role?.name,
         newValue: {
           startTime: created.startTime,
           endTime: created.endTime,
@@ -467,6 +470,7 @@ const scheduleHearing = async (caseId, data, currentUser) => {
             ? `Zoom meeting created for ${hearing.title}.`
             : `Zoom meeting creation failed for ${hearing.title}.`,
         actorUserId: currentUser.id,
+        actorUserRole: currentUser.role?.name,
         newValue: {
           zoomStatus: zoomFields.zoomStatus,
           zoomMeetingId: zoomFields.zoomMeetingId,
@@ -488,6 +492,7 @@ const scheduleHearing = async (caseId, data, currentUser) => {
           eventType: "CALENDAR_INVITE_SENT",
           summary: `Calendar invites sent for ${updated.title}.`,
           actorUserId: currentUser.id,
+        actorUserRole: currentUser.role?.name,
           newValue: { calendarSyncStatus: "SYNCED" },
         });
       });
@@ -707,6 +712,7 @@ const rescheduleHearing = async (caseId, hearingId, data, currentUser) => {
         eventType: "STATUS_CHANGED",
         summary: `${next.title} rescheduled.`,
         actorUserId: currentUser.id,
+        actorUserRole: currentUser.role?.name,
         previousValue: {
           startTime: hearing.startTime,
           endTime: hearing.endTime,
@@ -769,6 +775,7 @@ const rescheduleHearing = async (caseId, hearingId, data, currentUser) => {
           eventType: "CALENDAR_INVITE_SENT",
           summary: `Calendar invites re-sent for ${result.title}.`,
           actorUserId: currentUser.id,
+        actorUserRole: currentUser.role?.name,
           newValue: { calendarSyncStatus: "SYNCED" },
         });
       });
@@ -822,6 +829,7 @@ const cancelHearing = async (caseId, hearingId, reason, currentUser) => {
         eventType: "STATUS_CHANGED",
         summary: `${next.title} cancelled.`,
         actorUserId: currentUser.id,
+        actorUserRole: currentUser.role?.name,
         previousValue: hearing.hearingStatus,
         newValue: "CANCELLED",
         reason,
@@ -878,6 +886,7 @@ const retryZoom = async (caseId, hearingId, currentUser) => {
           ? `Zoom meeting re-created for ${hearing.title}.`
           : `Zoom retry failed for ${hearing.title}.`,
       actorUserId: currentUser.id,
+        actorUserRole: currentUser.role?.name,
       newValue: zoomFields,
     });
   });
@@ -915,6 +924,7 @@ const setManualZoomLink = async (caseId, hearingId, data, currentUser) => {
       eventType: "ZOOM_LINK_GENERATED",
       summary: `Manual Zoom link set for ${hearing.title}.`,
       actorUserId: currentUser.id,
+        actorUserRole: currentUser.role?.name,
       newValue: {
         zoomStatus: "MANUALLY_LINKED",
         zoomJoinUrl: data.joinUrl,
@@ -948,6 +958,7 @@ const retryCalendarInvites = async (caseId, hearingId, currentUser) => {
         eventType: "CALENDAR_INVITE_SENT",
         summary: `Calendar invites re-sent for ${hearing.title}.`,
         actorUserId: currentUser.id,
+        actorUserRole: currentUser.role?.name,
         newValue: { calendarSyncStatus: "SYNCED" },
       });
     });

@@ -3,10 +3,7 @@ const ApiResponse = require("../utils/apiResponse");
 const asyncHandler = require("../utils/asyncHandler");
 
 const createCase = asyncHandler(async (req, res) => {
-  const result = await caseService.createCase(
-    req.body,
-    req.user.id
-  );
+  const result = await caseService.createCase(req.body, req.user);
 
   return res.status(201).json(
     new ApiResponse(

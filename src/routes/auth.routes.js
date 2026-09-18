@@ -12,6 +12,7 @@ const {
   signInSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  resendInviteParamsSchema,
 } = require("../validations/auth.validation");
 
 const router = express.Router();
@@ -22,6 +23,14 @@ router.post(
   requireRole(RoleName.SUPER_ADMIN, RoleName.ADMIN_LEADERSHIP),
   validate(inviteUserSchema),
   authController.inviteUser,
+);
+
+router.post(
+  "/users/:userId/resend-invite",
+  auth,
+  requireRole(RoleName.SUPER_ADMIN, RoleName.ADMIN_LEADERSHIP),
+  validate(resendInviteParamsSchema, "params"),
+  authController.resendInvite,
 );
 
 router.post(

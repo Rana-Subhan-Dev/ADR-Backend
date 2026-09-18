@@ -5,6 +5,7 @@ const userSelect = {
   firstName: true,
   lastName: true,
   email: true,
+  role: { select: { id: true, name: true } },
 };
 
 const timelineSelect = {

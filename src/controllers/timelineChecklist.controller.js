@@ -13,17 +13,6 @@ const getTimeline = respond(200, "Case timeline fetched successfully.", (req) =>
   timelineChecklistService.getTimeline(req.params.caseId, req.query, req.user),
 );
 
-const createChecklistItem = respond(
-  201,
-  "Checklist item created successfully.",
-  (req) =>
-    timelineChecklistService.createChecklistItem(
-      req.params.caseId,
-      req.body,
-      req.user,
-    ),
-);
-
 const getChecklistItems = respond(
   200,
   "Checklist items fetched successfully.",
@@ -31,40 +20,6 @@ const getChecklistItems = respond(
     timelineChecklistService.getChecklistItems(
       req.params.caseId,
       req.query,
-      req.user,
-    ),
-);
-
-const getChecklistItem = respond(
-  200,
-  "Checklist item fetched successfully.",
-  (req) =>
-    timelineChecklistService.getChecklistItem(
-      req.params.caseId,
-      req.params.itemId,
-      req.user,
-    ),
-);
-
-const updateChecklistItem = respond(
-  200,
-  "Checklist item updated successfully.",
-  (req) =>
-    timelineChecklistService.updateChecklistItem(
-      req.params.caseId,
-      req.params.itemId,
-      req.body,
-      req.user,
-    ),
-);
-
-const deleteChecklistItem = respond(
-  200,
-  "Checklist item deleted successfully.",
-  (req) =>
-    timelineChecklistService.deleteChecklistItem(
-      req.params.caseId,
-      req.params.itemId,
       req.user,
     ),
 );
@@ -80,11 +35,11 @@ const completeChecklistItem = respond(
     ),
 );
 
-const reopenChecklistItem = respond(
+const markChecklistItemNotApplicable = respond(
   200,
-  "Checklist item reopened successfully.",
+  "Checklist item marked not applicable.",
   (req) =>
-    timelineChecklistService.reopenChecklistItem(
+    timelineChecklistService.markChecklistItemNotApplicable(
       req.params.caseId,
       req.params.itemId,
       req.user,
@@ -93,11 +48,7 @@ const reopenChecklistItem = respond(
 
 module.exports = {
   getTimeline,
-  createChecklistItem,
   getChecklistItems,
-  getChecklistItem,
-  updateChecklistItem,
-  deleteChecklistItem,
   completeChecklistItem,
-  reopenChecklistItem,
+  markChecklistItemNotApplicable,
 };

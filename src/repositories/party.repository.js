@@ -19,8 +19,8 @@ const PARTY_SELECT = {
   updatedAt: true,
 };
 
-const createParty = async (data) => {
-  return prisma.caseParty.create({
+const createParty = async (data, tx = prisma) => {
+  return tx.caseParty.create({
     data,
     select: PARTY_SELECT,
   });

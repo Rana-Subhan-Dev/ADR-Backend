@@ -76,7 +76,9 @@ const assertActiveCaseManager = async (caseManagerId) => {
   }
 };
 
-const createCase = async (data, currentUserId) => {
+const createCase = async (data, currentUser) => {
+  const currentUserId =
+    typeof currentUser === "string" ? currentUser : currentUser.id;
   const { caseManagerId, ...caseData } = data;
 
   await assertActiveCaseManager(caseManagerId);
@@ -95,8 +97,22 @@ const createCase = async (data, currentUserId) => {
 
     await caseRepository.setPrimaryCaseManager(newCase.id, caseManagerId, tx);
 
+    await tx.caseTimelineEvent.create({
+      data: {
+        caseId: newCase.id,
+        eventType: "CASE_CREATED",
+        relatedRecordType: "Case",
+        relatedRecordId: newCase.id,
+        summary: `Case ${caseNumber} created.`,
+        actorUserId: currentUserId,
+      },
+    });
+
     return newCase.id;
   });
+
+  const readinessChecklistService = require("./readinessChecklist.service");
+  await readinessChecklistService.ensureReadinessChecklist(createdCaseId);
 
   return mapCase(await caseRepository.findCaseById(createdCaseId));
 };

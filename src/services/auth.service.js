@@ -9,6 +9,7 @@ const {
 } = require("../constants/auth.constants");
 
 const authRepository = require("../repositories/auth.repository");
+const prisma = require("../config/prisma");
 
 const { hashPassword, comparePassword } = require("../utils/password");
 
@@ -97,6 +98,73 @@ const inviteUser = async (payload, invitedByUserId) => {
 
   return {
     user: sanitizeUser(user),
+    ...(process.env.NODE_ENV === "development" && {
+      invitationToken: rawToken,
+    }),
+  };
+};
+
+const resendInvite = async (userId, invitedByUserId) => {
+  const user = await authRepository.findUserById(userId);
+
+  if (!user) {
+    throw new ApiError(404, "User not found.");
+  }
+
+  if (!["INVITED", "INVITE_EXPIRED"].includes(user.status)) {
+    throw new ApiError(
+      400,
+      "Only users with a pending or expired invitation can be resent an invite.",
+    );
+  }
+
+  const rawToken = crypto.randomBytes(INVITATION_TOKEN_BYTES).toString("hex");
+  const tokenHash = hashToken(rawToken);
+  const now = new Date();
+  const expiresAt = new Date(
+    now.getTime() + INVITATION_EXPIRES_IN_DAYS * 24 * 60 * 60 * 1000,
+  );
+
+  const updatedUser = await prisma.$transaction(async (tx) => {
+    const priorResendCount =
+      await authRepository.getLatestAccountInvitationResendCount(userId, tx);
+
+    await authRepository.revokePendingAccountInvitations(userId, tx);
+
+    await authRepository.createAccountInvitation(
+      {
+        userId,
+        tokenHash,
+        invitedById: invitedByUserId,
+        expiresAt,
+        lastSentAt: now,
+        resendCount: priorResendCount + 1,
+      },
+      tx,
+    );
+
+    if (user.status === "INVITE_EXPIRED") {
+      return authRepository.setUserStatus(userId, "INVITED", tx);
+    }
+
+    return authRepository.findUserById(userId, tx);
+  });
+
+  const setupUrl = `${process.env.CLIENT_URL.replace(/\/$/, "")}/accept-invitation?token=${rawToken}`;
+
+  await sendEmail(
+    "Invitation to join FEDARB",
+    invitationTemplate(
+      updatedUser.role?.name || "User",
+      setupUrl,
+      INVITATION_EXPIRES_IN_DAYS,
+    ),
+    updatedUser.email,
+    "HTML",
+  );
+
+  return {
+    user: sanitizeUser(updatedUser),
     ...(process.env.NODE_ENV === "development" && {
       invitationToken: rawToken,
     }),
@@ -290,6 +358,7 @@ const resetPassword = async ({ token, password }) => {
 
 module.exports = {
   inviteUser,
+  resendInvite,
   acceptInvitation,
   signIn,
   forgotPassword,

@@ -1,6 +1,7 @@
 const partyRepository = require("../repositories/party.repository");
 const caseService = require("./case.service");
 const ApiError = require("../utils/apiError");
+const prisma = require("../config/prisma");
 const {
   DEFAULT_PAGE,
   DEFAULT_LIMIT,
@@ -10,7 +11,20 @@ const {
 const createParty = async (data, currentUser) => {
   await caseService.getCaseById(data.caseId, currentUser);
 
-  return partyRepository.createParty(data);
+  return prisma.$transaction(async (tx) => {
+    const party = await partyRepository.createParty(data, tx);
+    await tx.caseTimelineEvent.create({
+      data: {
+        caseId: data.caseId,
+        eventType: "PARTY_ADDED",
+        relatedRecordType: "CaseParty",
+        relatedRecordId: party.id,
+        summary: `Party added: ${party.organizationName || [party.firstName, party.lastName].filter(Boolean).join(" ") || party.id}.`,
+        actorUserId: currentUser.id,
+      },
+    });
+    return party;
+  });
 };
 
 const getParties = async (query, currentUser) => {

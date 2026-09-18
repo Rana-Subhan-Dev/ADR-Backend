@@ -98,7 +98,7 @@ const updateInquiry = async (id, data) => {
   return inquiryRepository.updateInquiry(id, data);
 };
 
-const convertToCase = async (id, payload = {}) => {
+const convertToCase = async (id, payload = {}, currentUser) => {
   const inquiry = await inquiryRepository.findInquiryById(id);
 
   if (!inquiry) {
@@ -161,8 +161,22 @@ const convertToCase = async (id, payload = {}) => {
     await caseRepository.setPrimaryCaseManager(newCase.id, caseManagerId, tx);
     await inquiryRepository.markInquiryConverted(inquiry.id, tx);
 
+    await tx.caseTimelineEvent.create({
+      data: {
+        caseId: newCase.id,
+        eventType: "CASE_CREATED",
+        relatedRecordType: "Case",
+        relatedRecordId: newCase.id,
+        summary: `Case ${caseNumber} created from inquiry.`,
+        actorUserId: currentUser?.id || null,
+      },
+    });
+
     return newCase.id;
   });
+
+  const readinessChecklistService = require("./readinessChecklist.service");
+  await readinessChecklistService.ensureReadinessChecklist(createdCaseId);
 
   return caseService.mapCase(await caseRepository.findCaseById(createdCaseId));
 };

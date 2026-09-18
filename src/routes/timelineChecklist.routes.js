@@ -15,14 +15,13 @@ const {
   caseIdSchema,
   itemIdSchema,
   getTimelineSchema,
-  createChecklistItemSchema,
-  updateChecklistItemSchema,
   getChecklistItemsSchema,
 } = require("../validations/timelineChecklist.validation");
 
 const router = express.Router({ mergeParams: true });
 
 router.use(auth);
+
 router.get(
   "/timeline",
   requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
@@ -30,18 +29,7 @@ router.get(
   validate(getTimelineSchema, "query"),
   timelineChecklistController.getTimeline,
 );
-router.post(
-  "/checklists",
-  requirePermission(PermissionModule.CASES, PermissionAction.EDIT),
-  requireInternalRole(
-    RoleName.SUPER_ADMIN,
-    RoleName.ADMIN_LEADERSHIP,
-    RoleName.CASE_MANAGER,
-  ),
-  validate(caseIdSchema, "params"),
-  validate(createChecklistItemSchema),
-  timelineChecklistController.createChecklistItem,
-);
+
 router.get(
   "/checklists",
   requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
@@ -49,35 +37,7 @@ router.get(
   validate(getChecklistItemsSchema, "query"),
   timelineChecklistController.getChecklistItems,
 );
-router.get(
-  "/checklists/:itemId",
-  requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
-  validate(itemIdSchema, "params"),
-  timelineChecklistController.getChecklistItem,
-);
-router.patch(
-  "/checklists/:itemId",
-  requirePermission(PermissionModule.CASES, PermissionAction.EDIT),
-  requireInternalRole(
-    RoleName.SUPER_ADMIN,
-    RoleName.ADMIN_LEADERSHIP,
-    RoleName.CASE_MANAGER,
-  ),
-  validate(itemIdSchema, "params"),
-  validate(updateChecklistItemSchema),
-  timelineChecklistController.updateChecklistItem,
-);
-router.delete(
-  "/checklists/:itemId",
-  requirePermission(PermissionModule.CASES, PermissionAction.DELETE),
-  requireInternalRole(
-    RoleName.SUPER_ADMIN,
-    RoleName.ADMIN_LEADERSHIP,
-    RoleName.CASE_MANAGER,
-  ),
-  validate(itemIdSchema, "params"),
-  timelineChecklistController.deleteChecklistItem,
-);
+
 router.post(
   "/checklists/:itemId/complete",
   requirePermission(PermissionModule.CASES, PermissionAction.EDIT),
@@ -89,8 +49,9 @@ router.post(
   validate(itemIdSchema, "params"),
   timelineChecklistController.completeChecklistItem,
 );
+
 router.post(
-  "/checklists/:itemId/reopen",
+  "/checklists/:itemId/not-applicable",
   requirePermission(PermissionModule.CASES, PermissionAction.EDIT),
   requireInternalRole(
     RoleName.SUPER_ADMIN,
@@ -98,7 +59,7 @@ router.post(
     RoleName.CASE_MANAGER,
   ),
   validate(itemIdSchema, "params"),
-  timelineChecklistController.reopenChecklistItem,
+  timelineChecklistController.markChecklistItemNotApplicable,
 );
 
 module.exports = router;

@@ -33,8 +33,8 @@ const findUserByEmail = async (email) => {
   });
 };
 
-const findUserById = async (id) => {
-  return prisma.user.findUnique({
+const findUserById = async (id, tx = prisma) => {
+  return tx.user.findUnique({
     where: { id },
     select: USER_WITH_ROLE_SELECT,
   });
@@ -97,10 +97,28 @@ const acceptInvitation = async ({
       select: USER_WITH_ROLE_SELECT,
     });
 
+    const invitedParticipants = await tx.caseParticipant.findMany({
+      where: { userId, invitationStatus: "INVITED" },
+      select: { id: true, caseId: true, role: true },
+    });
+
     await tx.caseParticipant.updateMany({
       where: { userId, invitationStatus: "INVITED" },
       data: { invitationStatus: "ACCEPTED", accessStatus: "ACTIVE" },
     });
+
+    for (const participant of invitedParticipants) {
+      await tx.caseTimelineEvent.create({
+        data: {
+          caseId: participant.caseId,
+          eventType: "PARTICIPANT_ACCESS_ACCEPTED",
+          relatedRecordType: "CaseParticipant",
+          relatedRecordId: participant.id,
+          summary: `Participant access accepted (${participant.role}).`,
+          actorUserId: userId,
+        },
+      });
+    }
 
     return user;
   });
@@ -208,6 +226,31 @@ const resetPasswordWithToken = async ({ userId, passwordHash, tokenId }) => {
   });
 };
 
+const revokePendingAccountInvitations = (userId, tx = prisma) =>
+  tx.accountInvitation.updateMany({
+    where: { userId, status: "PENDING" },
+    data: { status: "REVOKED", revokedAt: new Date() },
+  });
+
+const getLatestAccountInvitationResendCount = async (userId, tx = prisma) => {
+  const latest = await tx.accountInvitation.findFirst({
+    where: { userId },
+    orderBy: { createdAt: "desc" },
+    select: { resendCount: true },
+  });
+  return latest?.resendCount ?? 0;
+};
+
+const createAccountInvitation = (data, tx = prisma) =>
+  tx.accountInvitation.create({ data });
+
+const setUserStatus = (userId, status, tx = prisma) =>
+  tx.user.update({
+    where: { id: userId },
+    data: { status },
+    select: USER_WITH_ROLE_SELECT,
+  });
+
 module.exports = {
   findUserByEmail,
   findUserById,
@@ -224,4 +267,8 @@ module.exports = {
   invalidateUserResetTokens,
   markPasswordResetTokenUsed,
   resetPasswordWithToken,
+  revokePendingAccountInvitations,
+  getLatestAccountInvitationResendCount,
+  createAccountInvitation,
+  setUserStatus,
 };

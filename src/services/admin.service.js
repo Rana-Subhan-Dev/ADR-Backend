@@ -5,10 +5,39 @@ const {
   PaymentStatus,
 } = require("@prisma/client");
 const prisma = require("../config/prisma");
+const ApiError = require("../utils/apiError");
 
 const DEFAULT_PAGE = 1;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
+const AUDIT_EXPORT_MAX_ROWS = 10000;
+
+const auditLogActorSelect = {
+  id: true,
+  email: true,
+  firstName: true,
+  lastName: true,
+};
+
+const auditLogListSelect = {
+  id: true,
+  createdAt: true,
+  action: true,
+  module: true,
+  actingUserRoleSnapshot: true,
+  affectedRecordType: true,
+  affectedRecordId: true,
+  reason: true,
+  actingUser: { select: auditLogActorSelect },
+};
+
+const auditLogDetailSelect = {
+  ...auditLogListSelect,
+  previousValue: true,
+  newValue: true,
+  ipAddress: true,
+  deviceInfo: true,
+};
 
 const paginate = (items, total, page, limit, key) => {
   const totalPages = Math.ceil(total / limit) || 1;
@@ -587,9 +616,186 @@ const getAdminInvoices = async (query) => {
   };
 };
 
+const buildAuditLogWhere = (query) => {
+  const where = {};
+
+  if (query.module) where.module = query.module;
+  if (query.role) where.actingUserRoleSnapshot = query.role;
+
+  if (query.from || query.to) {
+    where.createdAt = {};
+    if (query.from && query.from !== "") {
+      where.createdAt.gte = new Date(query.from);
+    }
+    if (query.to && query.to !== "") {
+      where.createdAt.lte = new Date(query.to);
+    }
+    if (!where.createdAt.gte && !where.createdAt.lte) {
+      delete where.createdAt;
+    }
+  }
+
+  if (query.search) {
+    const term = String(query.search).trim();
+    if (term) {
+      where.OR = [
+        { id: { equals: term } },
+        { action: { contains: term, mode: "insensitive" } },
+        { affectedRecordId: { contains: term, mode: "insensitive" } },
+        { affectedRecordType: { contains: term, mode: "insensitive" } },
+        {
+          actingUser: {
+            OR: [
+              { email: { contains: term, mode: "insensitive" } },
+              { firstName: { contains: term, mode: "insensitive" } },
+              { lastName: { contains: term, mode: "insensitive" } },
+            ],
+          },
+        },
+      ];
+    }
+  }
+
+  return where;
+};
+
+const mapAuditLogRow = (row, { detail = false } = {}) => {
+  const actor = row.actingUser
+    ? {
+        id: row.actingUser.id,
+        email: row.actingUser.email,
+        firstName: row.actingUser.firstName,
+        lastName: row.actingUser.lastName,
+      }
+    : null;
+
+  const mapped = {
+    id: row.id,
+    createdAt: row.createdAt,
+    action: row.action,
+    module: row.module,
+    actingUserRoleSnapshot: row.actingUserRoleSnapshot,
+    affectedRecordType: row.affectedRecordType,
+    affectedRecordId: row.affectedRecordId,
+    reason: row.reason,
+    actor,
+  };
+
+  if (detail) {
+    mapped.previousValue = row.previousValue ?? null;
+    mapped.newValue = row.newValue ?? null;
+    mapped.ipAddress = row.ipAddress ?? null;
+    mapped.deviceInfo = row.deviceInfo ?? null;
+  }
+
+  return mapped;
+};
+
+const getAdminAuditLogs = async (query) => {
+  const { page, limit, skip } = parsePageLimit(query);
+  const where = buildAuditLogWhere(query);
+
+  const [rows, total] = await prisma.$transaction([
+    prisma.auditLog.findMany({
+      where,
+      skip,
+      take: limit,
+      orderBy: { createdAt: "desc" },
+      select: auditLogListSelect,
+    }),
+    prisma.auditLog.count({ where }),
+  ]);
+
+  return {
+    ...paginate(
+      rows.map((row) => mapAuditLogRow(row)),
+      total,
+      page,
+      limit,
+      "auditLogs",
+    ),
+    summary: { totalEvents: total },
+  };
+};
+
+const getAdminAuditLogById = async (id) => {
+  const row = await prisma.auditLog.findUnique({
+    where: { id },
+    select: auditLogDetailSelect,
+  });
+  if (!row) throw new ApiError(404, "Audit log not found.");
+  return mapAuditLogRow(row, { detail: true });
+};
+
+const csvEscape = (value) => {
+  if (value === null || value === undefined) return "";
+  const text = String(value);
+  if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
+};
+
+const exportAdminAuditLogsCsv = async (query) => {
+  const where = buildAuditLogWhere(query);
+  const rows = await prisma.auditLog.findMany({
+    where,
+    take: AUDIT_EXPORT_MAX_ROWS,
+    orderBy: { createdAt: "desc" },
+    select: {
+      ...auditLogListSelect,
+      ipAddress: true,
+    },
+  });
+
+  const header = [
+    "id",
+    "createdAt",
+    "action",
+    "module",
+    "actorEmail",
+    "actorName",
+    "actingUserRoleSnapshot",
+    "affectedRecordType",
+    "affectedRecordId",
+    "reason",
+    "ipAddress",
+  ];
+
+  const lines = [header.join(",")];
+  for (const row of rows) {
+    const actor = row.actingUser;
+    const actorName = actor
+      ? `${actor.firstName || ""} ${actor.lastName || ""}`.trim()
+      : "";
+    lines.push(
+      [
+        csvEscape(row.id),
+        csvEscape(row.createdAt?.toISOString?.() || row.createdAt),
+        csvEscape(row.action),
+        csvEscape(row.module),
+        csvEscape(actor?.email || ""),
+        csvEscape(actorName),
+        csvEscape(row.actingUserRoleSnapshot || ""),
+        csvEscape(row.affectedRecordType),
+        csvEscape(row.affectedRecordId),
+        csvEscape(row.reason || ""),
+        csvEscape(row.ipAddress || ""),
+      ].join(","),
+    );
+  }
+
+  const dateStamp = new Date().toISOString().slice(0, 10);
+  return {
+    csv: `\uFEFF${lines.join("\n")}\n`,
+    filename: `audit-logs-${dateStamp}.csv`,
+  };
+};
+
 module.exports = {
   getDashboard,
   getAdminUsers,
   getAdminCases,
   getAdminInvoices,
+  getAdminAuditLogs,
+  getAdminAuditLogById,
+  exportAdminAuditLogsCsv,
 };

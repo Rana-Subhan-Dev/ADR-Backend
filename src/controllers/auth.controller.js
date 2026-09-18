@@ -10,6 +10,14 @@ const inviteUser = asyncHandler(async (req, res) => {
     .json(new ApiResponse(201, result, "Invitation sent successfully."));
 });
 
+const resendInvite = asyncHandler(async (req, res) => {
+  const result = await authService.resendInvite(req.params.userId, req.user.id);
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, result, "Invitation resent successfully."));
+});
+
 const acceptInvitation = asyncHandler(async (req, res) => {
   const result = await authService.acceptInvitation(req.body);
 
@@ -51,6 +59,7 @@ const resetPassword = asyncHandler(async (req, res) => {
 
 module.exports = {
   inviteUser,
+  resendInvite,
   acceptInvitation,
   signIn,
   forgotPassword,
