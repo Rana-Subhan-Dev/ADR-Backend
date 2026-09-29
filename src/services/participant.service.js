@@ -4,6 +4,7 @@ const participantRepository = require("../repositories/participant.repository");
 const authRepository = require("../repositories/auth.repository");
 const caseService = require("./case.service");
 const ApiError = require("../utils/apiError");
+const { setupUrlForClient } = require("./auth.service");
 const { sendEmail } = require("../utils/sendEmail");
 const {
   invitationTemplate,
@@ -17,8 +18,6 @@ const hashToken = (token) =>
   crypto.createHash("sha256").update(token).digest("hex");
 const invitationExpiry = () =>
   new Date(Date.now() + INVITATION_EXPIRES_IN_DAYS * 24 * 60 * 60 * 1000);
-const setupUrl = (token) =>
-  `${process.env.CLIENT_URL.replace(/\/$/, "")}/accept-invitation?token=${token}`;
 
 const assertAssociations = async (data, caseId) => {
   if (
@@ -167,9 +166,10 @@ const inviteParticipant = async (caseId, data, currentUser) => {
       tx,
     ),
   );
+  const setupUrl = setupUrlForClient(data.role, token);
   await sendEmail(
     "Invitation to join FEDARB",
-    invitationTemplate(data.role, setupUrl(token), INVITATION_EXPIRES_IN_DAYS),
+    invitationTemplate(data.role, setupUrl, INVITATION_EXPIRES_IN_DAYS),
     email,
     "HTML",
   );
@@ -225,11 +225,12 @@ const resendInvitation = async (caseId, participantId, currentUser) => {
       tx,
     );
   });
+  const setupUrl = setupUrlForClient(participant.role, token);
   await sendEmail(
     "Invitation to join FEDARB",
     invitationTemplate(
       participant.role,
-      setupUrl(token),
+      setupUrl,
       INVITATION_EXPIRES_IN_DAYS,
     ),
     participant.user.email,

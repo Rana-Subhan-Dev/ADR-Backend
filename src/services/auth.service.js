@@ -23,9 +23,42 @@ const { sendEmail } = require("../utils/sendEmail");
 const {
   invitationTemplate,
 } = require("../shared/emailTemplates/invitationEmail");
+const {
+  forgotPasswordTemplate,
+} = require("../shared/emailTemplates/forgotPasswordEmail");
 
 const hashToken = (rawToken) =>
   crypto.createHash("sha256").update(rawToken).digest("hex");
+
+const normalizeRoleForClient = (roleName) => {
+  if (roleName === "CASE_MANAGER") {
+    return "case-manager";
+  }
+  if (roleName === "LAWYER") {
+    return "lawyer";
+  }
+  if (roleName === "CLIENT") {
+    return "client";
+  }
+  if (roleName === "NEUTRAL") {
+    return "neutral";
+  }
+  if (roleName === "ACCOUNTING_STAFF") {
+    return "accounting-staff";
+  }
+  return roleName;
+};
+
+const setupUrlForClient = (roleName, token, type = "invitation") => {
+  const normalizedRoleName = normalizeRoleForClient(roleName);
+  if (type === "invitation") {
+    return `${process.env.CLIENT_URL.replace(/\/$/, "")}/auth/${normalizedRoleName}/invitation?token=${token}`;
+  }
+  if (type === "password-reset-request") {
+    return `${process.env.CLIENT_URL.replace(/\/$/, "")}/auth/${normalizedRoleName}/reset-password?token=${token}`;
+  }
+  throw new ApiError(400, "Invalid type.");
+};
 
 const inviteUser = async (payload, invitedByUserId) => {
   const { email, jobTitle, userType, roleName } = payload;
@@ -87,7 +120,7 @@ const inviteUser = async (payload, invitedByUserId) => {
     },
   });
 
-  const setupUrl = `${process.env.CLIENT_URL.replace(/\/$/, "")}/accept-invitation?token=${rawToken}`;
+  const setupUrl = setupUrlForClient(roleName, rawToken);
 
   await sendEmail(
     "Invitation to join FEDARB",
@@ -150,7 +183,7 @@ const resendInvite = async (userId, invitedByUserId) => {
     return authRepository.findUserById(userId, tx);
   });
 
-  const setupUrl = `${process.env.CLIENT_URL.replace(/\/$/, "")}/accept-invitation?token=${rawToken}`;
+  const setupUrl = setupUrlForClient(updatedUser.role?.name, rawToken);
 
   await sendEmail(
     "Invitation to join FEDARB",
@@ -319,6 +352,20 @@ const forgotPassword = async (email, requestMeta = {}) => {
     requestedIp: requestMeta.ipAddress || null,
   });
 
+  const roleName = user.role?.name || "User";
+  const setupUrl = setupUrlForClient(
+    roleName,
+    rawToken,
+    "password-reset-request",
+  );
+
+  await sendEmail(
+    "Reset your FEDARB password",
+    forgotPasswordTemplate(roleName, setupUrl, resetMinutes),
+    normalizedEmail,
+    "HTML",
+  );
+
   return {
     ...genericResponse,
     ...(process.env.NODE_ENV === "development" && {
@@ -357,6 +404,7 @@ const resetPassword = async ({ token, password }) => {
 };
 
 module.exports = {
+  setupUrlForClient,
   inviteUser,
   resendInvite,
   acceptInvitation,
