@@ -10,6 +10,12 @@ const hearingRoutes = require("./hearing.routes");
 const hearingHubRoutes = require("./hearing.routes").hubRouter;
 const caseNoteRoutes = require("./caseNote.routes");
 const documentRoutes = require("./document.routes");
+const documentHubRoutes = require("./documentHub.routes");
+const participantHubRoutes = require("./participantHub.routes");
+const contactRoutes = require("./contact.routes");
+const dashboardRoutes = require("./dashboard.routes");
+const notificationRoutes = require("./notification.routes");
+const reportRoutes = require("./report.routes");
 const timelineChecklistRoutes = require("./timelineChecklist.routes");
 const timesheetRoutes = require("./timesheet.routes");
 const docusignRoutes = require("./docusign.routes");
@@ -58,6 +64,30 @@ const defaultRoutes = [
   {
     path: "/hearings",
     route: hearingHubRoutes,
+  },
+  {
+    path: "/documents",
+    route: documentHubRoutes,
+  },
+  {
+    path: "/participants",
+    route: participantHubRoutes,
+  },
+  {
+    path: "/contacts",
+    route: contactRoutes,
+  },
+  {
+    path: "/dashboard",
+    route: dashboardRoutes,
+  },
+  {
+    path: "/notifications",
+    route: notificationRoutes,
+  },
+  {
+    path: "/reports",
+    route: reportRoutes,
   },
   {
     path: "/cases/:caseId/hearings",

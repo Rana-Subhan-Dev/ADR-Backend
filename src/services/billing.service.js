@@ -15,6 +15,12 @@ const {
   BillingInputSource,
   BillingExpensesPolicy,
 } = require("@prisma/client");
+const {
+  normalizeBillingConfigPayload,
+  normalizeBillingTypeInput,
+  normalizeBillingModeInput,
+  normalizeBillingInputSourceInput,
+} = require("../utils/cmPayloadNormalize");
 
 const allowedBillingRoles = [
   "SUPER_ADMIN",
@@ -267,16 +273,98 @@ const validatePayerSplitsForCase = async (caseId, payload) => {
   }
 };
 
+const partyDisplayName = (party) => {
+  if (!party) return null;
+  return (
+    party.organizationName ||
+    [party.firstName, party.lastName].filter(Boolean).join(" ").trim() ||
+    null
+  );
+};
+
+const isBillingConfigComplete = (config) => {
+  if (!config) return false;
+  if (!config.billingType) return false;
+  const splits = config.payerSplits || [];
+  if (splits.length === 0) return false;
+  const hasContact = splits.some(
+    (s) => s.invoiceContactEmail || s.invoiceContactName,
+  );
+  if (!hasContact) return false;
+  if (config.splitBillingEnabled) {
+    const total = splits.reduce(
+      (sum, s) => sum + Number(s.splitPercentage || 0),
+      0,
+    );
+    if (Math.abs(total - 100) > 0.01) return false;
+  }
+  return true;
+};
+
+const formatNeutralFeeSummary = (config) => {
+  if (!config) return null;
+  const parts = [];
+  if (config.billingType) parts.push(config.billingType);
+  if (config.neutralHourlyRate != null) {
+    parts.push(`$${Number(config.neutralHourlyRate).toFixed(2)}/hr`);
+  } else if (config.neutralDailyRate != null) {
+    parts.push(`$${Number(config.neutralDailyRate).toFixed(2)}/day`);
+  } else if (config.flatFeeAmount != null) {
+    parts.push(`$${Number(config.flatFeeAmount).toFixed(2)} flat`);
+  } else if (config.customRate != null) {
+    parts.push(`$${Number(config.customRate).toFixed(2)} custom`);
+  }
+  return parts.length ? parts.join(" · ") : null;
+};
+
+const computeInvoiceBalances = (invoice, now = new Date()) => {
+  const amountDue = Number(invoice.amountDue || 0);
+  const paid = (invoice.payments || []).reduce(
+    (sum, p) => sum + Number(p.amount || 0),
+    0,
+  );
+  const credited = (invoice.creditNotes || []).reduce(
+    (sum, c) => sum + Number(c.amount || 0),
+    0,
+  );
+  const openBalance = roundMoney(Math.max(0, amountDue - paid - credited));
+  const dueDate = invoice.dueDate ? new Date(invoice.dueDate) : null;
+  const overdue =
+    openBalance > 0 &&
+    dueDate &&
+    dueDate < now &&
+    invoice.paymentStatus !== PaymentStatus.PAID &&
+    invoice.invoiceStatus !== InvoiceStatus.VOID;
+  const agingBucket = (() => {
+    if (openBalance <= 0 || !dueDate) return null;
+    const diffDays = Math.floor((now - dueDate) / (1000 * 60 * 60 * 24));
+    if (diffDays <= 0) return "current";
+    if (diffDays <= 30) return "1-30";
+    if (diffDays <= 60) return "31-60";
+    if (diffDays <= 90) return "61-90";
+    return "90+";
+  })();
+  return {
+    amountDue,
+    amountPaid: roundMoney(paid),
+    amountCredited: roundMoney(credited),
+    openBalance,
+    overdue: Boolean(overdue),
+    agingBucket,
+  };
+};
+
 const upsertCaseBillingConfig = async (caseId, payload, currentUser) => {
   await assertCanMutateCaseBilling(caseId, currentUser);
   await caseService.getCaseById(caseId, currentUser);
 
-  await validatePayerSplitsForCase(caseId, payload);
+  const normalizedPayload = normalizeBillingConfigPayload(payload);
+  await validatePayerSplitsForCase(caseId, normalizedPayload);
   const {
     payerSplits,
     additionalTimekeepers,
     ...rest
-  } = payload;
+  } = normalizedPayload;
 
   const scalarData = {};
   for (const key of BILLING_CONFIG_SCALAR_KEYS) {
@@ -404,20 +492,27 @@ const getBillingConfigurationsList = async (query, currentUser) => {
   }
 
   const billingConfigurationFilter = {};
+  // Status filter applied after enrichment when CONFIGURED means "complete".
+  // For DB prefilter: INCOMPLETE includes null config; CONFIGURED requires a config row.
   if (query.status === "CONFIGURED") {
     caseWhere.billingConfiguration = { isNot: null };
   } else if (query.status === "INCOMPLETE") {
-    caseWhere.billingConfiguration = null;
+    // Keep both missing and incomplete configs; refine after map if needed.
   }
 
   if (query.billingType) {
-    billingConfigurationFilter.billingType = query.billingType;
+    billingConfigurationFilter.billingType = normalizeBillingTypeInput(
+      query.billingType,
+    );
   }
   if (query.billingInputSource) {
-    billingConfigurationFilter.billingInputSource = query.billingInputSource;
+    billingConfigurationFilter.billingInputSource =
+      normalizeBillingInputSourceInput(query.billingInputSource);
   }
   if (query.billingMode) {
-    billingConfigurationFilter.billingMode = query.billingMode;
+    billingConfigurationFilter.billingMode = normalizeBillingModeInput(
+      query.billingMode,
+    );
   }
 
   if (Object.keys(billingConfigurationFilter).length > 0) {
@@ -445,19 +540,87 @@ const getBillingConfigurationsList = async (query, currentUser) => {
     },
   );
 
-  const enrichedCases = cases.map((c) => ({
-    caseId: c.id,
-    caseNumber: c.caseNumber,
-    title: c.title,
-    caseType: c.caseType,
-    lifecycleStatus: c.lifecycleStatus,
-    parties: c.parties,
-    neutrals: c.participants.map((p) => p.user),
-    configuration: c.billingConfiguration,
-    status: c.billingConfiguration ? "CONFIGURED" : "INCOMPLETE",
-    createdAt: c.createdAt,
-    updatedAt: c.updatedAt,
-  }));
+  let enrichedCases = cases.map((c) => {
+    const config = c.billingConfiguration;
+    const configured = isBillingConfigComplete(config);
+    const splits = config?.payerSplits || [];
+    const primarySplit = splits[0] || null;
+    const payerNames = splits
+      .map((s) => {
+        const party = (c.parties || []).find((p) => p.id === s.casePartyId);
+        return partyDisplayName(party);
+      })
+      .filter(Boolean);
+    const neutrals = (c.participants || []).map((p) => p.user);
+    const matterName = c.inquiry?.matterName || c.title;
+    return {
+      caseId: c.id,
+      caseNumber: c.caseNumber,
+      title: c.title,
+      matterName,
+      caseType: c.caseType,
+      lifecycleStatus: c.lifecycleStatus,
+      caseStatus: c.lifecycleStatus,
+      parties: c.parties,
+      neutrals,
+      neutral: neutrals
+        .map((u) =>
+          [u?.firstName, u?.lastName].filter(Boolean).join(" ").trim(),
+        )
+        .filter(Boolean)
+        .join(", ") || null,
+      payer: payerNames.join(", ") || null,
+      billingInputType: config?.billingInputSource || null,
+      billingInputSource: config?.billingInputSource || null,
+      neutralFee: formatNeutralFeeSummary(config),
+      fedarbFee:
+        config?.fedArbFeeScheduleType ||
+        (config?.setupFee != null || config?.administrationFee != null
+          ? "Configured"
+          : null),
+      splitBilling: config?.splitBillingEnabled ? "Yes" : "No",
+      splitBillingEnabled: Boolean(config?.splitBillingEnabled),
+      invoiceContact: primarySplit
+        ? {
+            name: primarySplit.invoiceContactName || null,
+            email: primarySplit.invoiceContactEmail || null,
+          }
+        : null,
+      configuration: config,
+      feeSummary: {
+        billingType: config?.billingType || null,
+        neutralHourlyRate: config?.neutralHourlyRate
+          ? Number(config.neutralHourlyRate)
+          : null,
+        flatFeeAmount: config?.flatFeeAmount
+          ? Number(config.flatFeeAmount)
+          : null,
+        setupFee: config?.setupFee ? Number(config.setupFee) : null,
+        administrationFee: config?.administrationFee
+          ? Number(config.administrationFee)
+          : null,
+      },
+      splitSummary: {
+        enabled: Boolean(config?.splitBillingEnabled),
+        payerCount: splits.length,
+        totalPercentage: splits.reduce(
+          (sum, s) => sum + Number(s.splitPercentage || 0),
+          0,
+        ),
+      },
+      configured,
+      status: configured ? "CONFIGURED" : "INCOMPLETE",
+      lastUpdate: config?.updatedAt || c.updatedAt,
+      createdAt: c.createdAt,
+      updatedAt: c.updatedAt,
+    };
+  });
+
+  if (query.status === "CONFIGURED") {
+    enrichedCases = enrichedCases.filter((row) => row.configured);
+  } else if (query.status === "INCOMPLETE") {
+    enrichedCases = enrichedCases.filter((row) => !row.configured);
+  }
 
   return paginate(enrichedCases, total, page, limit, "configurations");
 };
@@ -485,6 +648,11 @@ const getApprovedTimesheets = async (query, currentUser) => {
   await assertCaseAccessIfProvided(query.caseId, currentUser);
   if (query.caseId) where.caseId = query.caseId;
   if (query.hearingId) where.hearingId = query.hearingId;
+  if (query.hearingOnly === true || query.hearingOnly === "true") {
+    where.hearingId = { not: null };
+  } else if (query.hearingOnly === false || query.hearingOnly === "false") {
+    where.hearingId = null;
+  }
   if (query.neutralUserId) where.neutralUserId = query.neutralUserId;
   if (query.activityType) where.activityType = query.activityType;
 
@@ -546,12 +714,20 @@ const getApprovedTimesheets = async (query, currentUser) => {
         }
       }
     }
+    const billingConfig = ts.case?.billingConfiguration || null;
+    const rate = resolveTimesheetRate(ts.activityType, billingConfig, {});
+    const hours = Number(ts.hours || 0);
+    const amount = roundMoney(hours * rate);
+    const expensesTotal = (ts.expenses || []).reduce(
+      (sum, row) => sum + Number(row.amount || 0),
+      0,
+    );
     return {
       ...ts,
-      expensesTotal: (ts.expenses || []).reduce(
-        (sum, row) => sum + Number(row.amount || 0),
-        0,
-      ),
+      matterName: ts.case?.inquiry?.matterName || ts.case?.title || null,
+      rate,
+      amount,
+      expensesTotal,
       associationStatus,
       activeInvoice,
     };
@@ -1590,7 +1766,52 @@ const getInvoicesList = async (query, currentUser) => {
     },
   });
 
-  return paginate(invoices, total, page, limit, "invoices");
+  const now = new Date();
+  const enriched = invoices.map((invoice) => {
+    const balances = computeInvoiceBalances(invoice, now);
+    const payer = invoice.payerCaseParty;
+    const neutrals = (invoice.case?.participants || [])
+      .filter((p) => p.role === "NEUTRAL")
+      .map((p) => p.user);
+    return {
+      ...invoice,
+      matterName: invoice.case?.title || null,
+      payer: partyDisplayName(payer),
+      payerContact: payer
+        ? {
+            name: partyDisplayName(payer),
+            email: payer.email || null,
+            phone: payer.phone || null,
+          }
+        : null,
+      invoiceContact: {
+        name:
+          invoice.case?.billingConfiguration?.payerSplits?.find(
+            (s) => s.casePartyId === invoice.payerCasePartyId,
+          )?.invoiceContactName || partyDisplayName(payer),
+        email:
+          invoice.case?.billingConfiguration?.payerSplits?.find(
+            (s) => s.casePartyId === invoice.payerCasePartyId,
+          )?.invoiceContactEmail || payer?.email || null,
+      },
+      neutral: neutrals
+        .map((u) =>
+          [u?.firstName, u?.lastName].filter(Boolean).join(" ").trim(),
+        )
+        .filter(Boolean)
+        .join(", ") || null,
+      amount: balances.amountDue,
+      openBalance: balances.openBalance,
+      amountPaid: balances.amountPaid,
+      overdue: balances.overdue,
+      agingBucket: balances.agingBucket,
+      qbSync: invoice.quickBooksSyncStatus,
+      payment: invoice.paymentStatus,
+      status: invoice.invoiceStatus,
+    };
+  });
+
+  return paginate(enriched, total, page, limit, "invoices");
 };
 
 const recordPayment = async (invoiceId, payload, currentUser) => {
@@ -1625,6 +1846,8 @@ const recordPayment = async (invoiceId, payload, currentUser) => {
         amount: paymentAmount,
         paymentDate: new Date(payload.paymentDate),
         method: payload.method || null,
+        referenceNumber: emptyToNull(payload.referenceNumber) || null,
+        notes: emptyToNull(payload.notes) || null,
       },
     });
 
@@ -1735,46 +1958,106 @@ const getPaymentTracking = async (query, currentUser) => {
   const skip = (page - 1) * limit;
 
   const caseScope = buildBillingCaseScope(currentUser);
-  const where = {};
+  let where = {
+    invoiceStatus: {
+      not: InvoiceStatus.VOID,
+    },
+  };
 
   if (Object.keys(caseScope).length > 0) {
-    where.invoice = { case: caseScope };
+    where.case = caseScope;
   }
 
   await assertCaseAccessIfProvided(query.caseId, currentUser);
-  if (query.caseId) {
-    where.invoice = { ...(where.invoice || {}), caseId: query.caseId };
-  }
+  if (query.caseId) where.caseId = query.caseId;
   if (query.invoiceId) {
     await getInvoiceById(query.invoiceId, currentUser);
-    where.invoiceId = query.invoiceId;
+    where.id = query.invoiceId;
   }
+  if (query.paymentStatus) where.paymentStatus = query.paymentStatus;
+  if (query.invoiceStatus) where.invoiceStatus = query.invoiceStatus;
+
+  if (query.search) {
+    where.OR = [
+      { invoiceNumber: { contains: query.search, mode: "insensitive" } },
+      { case: { caseNumber: { contains: query.search, mode: "insensitive" } } },
+      { case: { title: { contains: query.search, mode: "insensitive" } } },
+    ];
+  }
+
   if (query.fromDate || query.toDate) {
-    where.paymentDate = {
+    where.invoiceDate = {
       ...(query.fromDate && { gte: new Date(query.fromDate) }),
       ...(query.toDate && { lte: new Date(query.toDate) }),
     };
   }
 
-  const { payments, total } = await billingRepository.getPayments({
+  const { invoices, total } = await billingRepository.getInvoices({
     where,
     skip,
     take: limit,
     orderBy: {
-      [query.sortBy || "paymentDate"]:
+      [query.sortBy === "paymentDate" ? "dueDate" : query.sortBy || "dueDate"]:
         query.sortOrder === "asc" ? "asc" : "desc",
     },
   });
 
   const now = new Date();
-  const allInvoices = await prisma.invoice.findMany({
-    where: {
-      invoiceStatus: {
-        in: [InvoiceStatus.ISSUED, InvoiceStatus.SENT, InvoiceStatus.OVERDUE],
-      },
-      paymentStatus: { in: [PaymentStatus.UNPAID, PaymentStatus.PARTIAL] },
-      ...(Object.keys(caseScope).length > 0 ? { case: caseScope } : {}),
+  let rows = invoices.map((invoice) => {
+    const balances = computeInvoiceBalances(invoice, now);
+    const payer = invoice.payerCaseParty;
+    return {
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      caseId: invoice.caseId,
+      caseNumber: invoice.case?.caseNumber || null,
+      matterName: invoice.case?.title || null,
+      payer: partyDisplayName(payer),
+      payerContact: payer
+        ? {
+            name: partyDisplayName(payer),
+            email: payer.email || null,
+          }
+        : null,
+      invoiceDate: invoice.invoiceDate,
+      dueDate: invoice.dueDate,
+      amountDue: balances.amountDue,
+      amountPaid: balances.amountPaid,
+      amountCredited: balances.amountCredited,
+      openBalance: balances.openBalance,
+      outstanding: balances.openBalance,
+      paymentStatus: invoice.paymentStatus,
+      invoiceStatus: invoice.invoiceStatus,
+      overdue: balances.overdue,
+      agingBucket: balances.agingBucket,
+      quickBooksSyncStatus: invoice.quickBooksSyncStatus,
+      qbStatus: invoice.quickBooksSyncStatus,
+      payments: invoice.payments || [],
+      lastPaymentAt: invoice.payments?.[0]?.paymentDate || null,
+    };
+  });
+
+  if (query.agingBucket) {
+    const wanted = String(query.agingBucket).toLowerCase();
+    rows = rows.filter(
+      (row) => String(row.agingBucket || "").toLowerCase() === wanted,
+    );
+  }
+  if (query.overdueOnly === true || query.overdueOnly === "true") {
+    rows = rows.filter((row) => row.overdue);
+  }
+
+  const agingWhere = {
+    invoiceStatus: {
+      in: [InvoiceStatus.ISSUED, InvoiceStatus.SENT, InvoiceStatus.OVERDUE],
     },
+    paymentStatus: { in: [PaymentStatus.UNPAID, PaymentStatus.PARTIAL] },
+    ...(Object.keys(caseScope).length > 0 ? { case: caseScope } : {}),
+    ...(query.caseId ? { caseId: query.caseId } : {}),
+  };
+
+  const allInvoices = await prisma.invoice.findMany({
+    where: agingWhere,
     include: {
       payments: true,
       creditNotes: true,
@@ -1790,33 +2073,24 @@ const getPaymentTracking = async (query, currentUser) => {
   };
 
   for (const inv of allInvoices) {
-    const paid = inv.payments.reduce((acc, p) => acc + Number(p.amount), 0);
-    const credited = inv.creditNotes.reduce(
-      (acc, c) => acc + Number(c.amount),
-      0,
-    );
-    const outstanding = Math.max(0, Number(inv.amountDue) - paid - credited);
-    if (outstanding <= 0) continue;
-
-    aging.totalOutstanding += outstanding;
-    const baseDate = inv.dueDate
-      ? new Date(inv.dueDate)
-      : new Date(inv.createdAt);
-    const diffDays = Math.floor((now - baseDate) / (1000 * 60 * 60 * 24));
-
-    if (diffDays <= 30) {
-      aging.current += outstanding;
-    } else if (diffDays <= 60) {
-      aging.days31to60 += outstanding;
-    } else if (diffDays <= 90) {
-      aging.days61to90 += outstanding;
+    const balances = computeInvoiceBalances(inv, now);
+    if (balances.openBalance <= 0) continue;
+    aging.totalOutstanding += balances.openBalance;
+    const bucket = balances.agingBucket;
+    if (bucket === "current" || bucket === "1-30") {
+      aging.current += balances.openBalance;
+    } else if (bucket === "31-60") {
+      aging.days31to60 += balances.openBalance;
+    } else if (bucket === "61-90") {
+      aging.days61to90 += balances.openBalance;
     } else {
-      aging.days90Plus += outstanding;
+      aging.days90Plus += balances.openBalance;
     }
   }
 
   return {
-    ...paginate(payments, total, page, limit, "payments"),
+    ...paginate(rows, total, page, limit, "invoices"),
+    payments: rows,
     agingSummary: {
       current: Number(aging.current.toFixed(2)),
       days31to60: Number(aging.days31to60.toFixed(2)),
@@ -1825,6 +2099,70 @@ const getPaymentTracking = async (query, currentUser) => {
       totalOutstanding: Number(aging.totalOutstanding.toFixed(2)),
     },
   };
+};
+
+const updateInvoicePaymentStatus = async (invoiceId, payload, currentUser) => {
+  const invoice = await billingRepository.findInvoiceById(invoiceId);
+  if (!invoice) throw new ApiError(404, "Invoice not found.");
+  await assertCanMutateCaseBilling(invoice.caseId, currentUser);
+  if (invoice.invoiceStatus === InvoiceStatus.VOID) {
+    throw new ApiError(400, "Cannot update payment status on a void invoice.");
+  }
+
+  const paymentStatus = payload.paymentStatus;
+  if (![PaymentStatus.UNPAID, PaymentStatus.PARTIAL, PaymentStatus.PAID].includes(
+    paymentStatus,
+  )) {
+    throw new ApiError(400, "Invalid payment status.");
+  }
+
+  const balances = computeInvoiceBalances(invoice);
+  const invoiceStatusUpdate = {};
+  if (
+    balances.overdue &&
+    paymentStatus !== PaymentStatus.PAID &&
+    [InvoiceStatus.ISSUED, InvoiceStatus.SENT].includes(invoice.invoiceStatus)
+  ) {
+    invoiceStatusUpdate.invoiceStatus = InvoiceStatus.OVERDUE;
+  } else if (
+    paymentStatus === PaymentStatus.PAID &&
+    invoice.invoiceStatus === InvoiceStatus.OVERDUE
+  ) {
+    invoiceStatusUpdate.invoiceStatus = InvoiceStatus.SENT;
+  }
+
+  return runTransaction(async (tx) => {
+    const updated = await tx.invoice.update({
+      where: { id: invoiceId },
+      data: {
+        paymentStatus,
+        ...invoiceStatusUpdate,
+      },
+      select: billingRepository.invoiceSelect,
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actingUserId: currentUser.id,
+        actingUserRoleSnapshot: currentUser.role?.name || null,
+        action: "UPDATE_INVOICE_PAYMENT_STATUS",
+        module: "BILLING",
+        affectedRecordType: "Invoice",
+        affectedRecordId: invoiceId,
+        reason: payload.notes || null,
+        previousValue: { paymentStatus: invoice.paymentStatus },
+        newValue: { paymentStatus, notes: payload.notes || null },
+      },
+    });
+
+    const enrichedBalances = computeInvoiceBalances(updated);
+    return {
+      ...updated,
+      openBalance: enrichedBalances.openBalance,
+      overdue: enrichedBalances.overdue,
+      agingBucket: enrichedBalances.agingBucket,
+    };
+  });
 };
 
 const syncInvoiceToQuickBooks = async (invoiceId, currentUser) => {
@@ -2087,6 +2425,7 @@ module.exports = {
   recordPayment,
   recordCreditNote,
   getPaymentTracking,
+  updateInvoicePaymentStatus,
   syncInvoiceToQuickBooks,
   getQuickBooksSyncLogs,
   retryQuickBooksSync,

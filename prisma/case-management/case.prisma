@@ -7,12 +7,17 @@ model Case {
   inquiry   Inquiry? @relation(fields: [inquiryId], references: [id], onDelete: SetNull)
 
   title    String
+  summary  String? @db.Text
   caseType CaseType
+  caseTypeLabel String?
 
   disputeCategoryId String?
   disputeCategory   DisputeCategory? @relation(fields: [disputeCategoryId], references: [id], onDelete: SetNull)
 
+  disputePartyStructure DisputePartyStructure?
+
   lifecycleStatus CaseLifecycleStatus @default(INTAKE)
+  isDraft         Boolean             @default(false)
 
   stageId String?
   stage   CaseStage? @relation(fields: [stageId], references: [id], onDelete: SetNull)
@@ -27,9 +32,16 @@ model Case {
   nextStep        String?
 
   jurisdiction   String?
+  referralSource String?
   closedAt       DateTime?
   closureSummary String? @db.Text
   reopenReason   String?
+
+  primaryCommunicationMethod PrimaryCommunicationMethod?
+  notifyOnHearingScheduled   Boolean @default(false)
+  notifyOnDocumentUploaded   Boolean @default(false)
+  notifyOnCaseUpdate         Boolean @default(false)
+  notifyOnDocuSignSent       Boolean @default(false)
 
   legacyCaseNumber  String?
   legacyReferenceId String?
@@ -62,6 +74,7 @@ model Case {
   @@index([lifecycleStatus])
   @@index([stageId])
   @@index([disputeCategoryId])
+  @@index([isDraft])
   @@map("cases")
 }
 

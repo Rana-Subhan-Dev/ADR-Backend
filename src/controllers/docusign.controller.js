@@ -38,11 +38,33 @@ const getEnvelope = respond(
     ),
 );
 
+const getEnvelopeByExternalId = respond(
+  200,
+  "DocuSign envelope fetched successfully.",
+  (req) =>
+    docusignService.getEnvelopeByExternalId(
+      req.params.caseId,
+      req.params.envelopeId,
+      req.user,
+    ),
+);
+
 const remindEnvelope = respond(
   200,
   "DocuSign reminder sent successfully.",
   (req) =>
     docusignService.remindEnvelope(
+      req.params.caseId,
+      req.params.envelopeRecordId,
+      req.user,
+    ),
+);
+
+const retryEnvelope = respond(
+  201,
+  "DocuSign envelope retry created successfully.",
+  (req) =>
+    docusignService.retryEnvelope(
       req.params.caseId,
       req.params.envelopeRecordId,
       req.user,
@@ -116,7 +138,9 @@ module.exports = {
   sendEnvelope,
   getEnvelopes,
   getEnvelope,
+  getEnvelopeByExternalId,
   remindEnvelope,
+  retryEnvelope,
   getSignedPdf,
   getSourcePdf,
   getSigningUrl,

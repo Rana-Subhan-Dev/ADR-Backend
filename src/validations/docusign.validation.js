@@ -6,6 +6,10 @@ const envelopeRecordIdSchema = Joi.object({
   caseId: Joi.string().uuid().required(),
   envelopeRecordId: Joi.string().uuid().required(),
 });
+const envelopeExternalIdSchema = Joi.object({
+  caseId: Joi.string().uuid().required(),
+  envelopeId: Joi.string().trim().min(1).max(255).required(),
+});
 
 const recipientSchema = Joi.object({
   name: Joi.string().trim().min(1).max(255).required(),
@@ -52,6 +56,7 @@ const recipientViewSchema = Joi.object({
 module.exports = {
   caseIdSchema,
   envelopeRecordIdSchema,
+  envelopeExternalIdSchema,
   sendEnvelopeSchema,
   listEnvelopesSchema,
   recipientViewSchema,

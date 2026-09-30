@@ -13,6 +13,7 @@ const participantSelect = {
   revokeReason: true,
   createdAt: true,
   updatedAt: true,
+  case: { select: { id: true, caseNumber: true, title: true } },
   user: {
     select: {
       id: true,
@@ -56,14 +57,19 @@ const findParticipantByUserAndCase = (userId, caseId) =>
     select: participantSelect,
   });
 
-const getParticipants = ({ where, skip, take }) =>
+const participantHubSelect = {
+  ...participantSelect,
+  case: { select: { id: true, caseNumber: true, title: true } },
+};
+
+const getParticipants = ({ where, skip, take, hub = false }) =>
   prisma.$transaction([
     prisma.caseParticipant.findMany({
       where,
       skip,
       take,
       orderBy: { createdAt: "desc" },
-      select: participantSelect,
+      select: hub ? participantHubSelect : participantSelect,
     }),
     prisma.caseParticipant.count({ where }),
   ]);
@@ -145,6 +151,29 @@ const findPrimaryNeutral = (caseId, tx = prisma) =>
     select: participantSelect,
   });
 
+const findInvitationsByUserId = (userId) =>
+  prisma.accountInvitation.findMany({
+    where: { userId },
+    orderBy: { lastSentAt: "desc" },
+    select: {
+      id: true,
+      status: true,
+      expiresAt: true,
+      lastSentAt: true,
+      createdAt: true,
+      revokedAt: true,
+      resendCount: true,
+      invitedBy: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+        },
+      },
+    },
+  });
+
 module.exports = {
   findParticipantById,
   findParticipantByUserAndCase,
@@ -159,4 +188,5 @@ module.exports = {
   findActiveNeutralByUserId,
   getActiveNeutrals,
   findPrimaryNeutral,
+  findInvitationsByUserId,
 };

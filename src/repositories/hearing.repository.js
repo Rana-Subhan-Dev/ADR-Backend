@@ -14,6 +14,7 @@ const hearingSelect = {
   endTime: true,
   location: true,
   instructions: true,
+  outcomeNotes: true,
   timezone: true,
   durationMinutes: true,
   hearingStatus: true,
@@ -48,6 +49,7 @@ const hearingSelect = {
       id: true,
       side: true,
       attendanceStatus: true,
+      notes: true,
       caseParticipant: {
         select: {
           id: true,
@@ -58,6 +60,16 @@ const hearingSelect = {
               firstName: true,
               lastName: true,
               email: true,
+              phone: true,
+            },
+          },
+          caseParty: {
+            select: {
+              id: true,
+              side: true,
+              organizationName: true,
+              firstName: true,
+              lastName: true,
             },
           },
         },
@@ -85,6 +97,24 @@ const createHearing = (data, tx = prisma) =>
   tx.hearing.create({ data, select: hearingSelect });
 const updateHearing = (id, data, tx = prisma) =>
   tx.hearing.update({ where: { id }, data, select: hearingSelect });
+
+const updateAttendeeAttendance = (
+  hearingId,
+  caseParticipantId,
+  attendanceStatus,
+  tx = prisma,
+) =>
+  tx.hearingAttendee.update({
+    where: {
+      hearingId_caseParticipantId: { hearingId, caseParticipantId },
+    },
+    data: { attendanceStatus },
+    select: {
+      id: true,
+      attendanceStatus: true,
+      caseParticipantId: true,
+    },
+  });
 
 const findCaseParticipants = (caseId, ids, tx = prisma) =>
   tx.caseParticipant.findMany({
@@ -156,6 +186,7 @@ module.exports = {
   getHearings,
   createHearing,
   updateHearing,
+  updateAttendeeAttendance,
   findCaseParticipants,
   findUserEmail,
   findConflictingHearings,

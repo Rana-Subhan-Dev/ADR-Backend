@@ -140,6 +140,9 @@ model Payment {
   paymentDate DateTime
   method      String?
 
+  referenceNumber String?
+  notes           String? @db.Text
+
   quickBooksPaymentId String?
 
   createdAt DateTime @default(now()) @db.Timestamp(3)

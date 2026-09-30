@@ -1,6 +1,7 @@
 const prisma = require("../config/prisma");
 const documentRepository = require("../repositories/document.repository");
 const caseService = require("./case.service");
+const { accessibleCaseWhere } = require("../utils/caseAccess");
 const {
   getSignedDownloadUrl,
   deleteManyS3Objects,
@@ -152,10 +153,15 @@ const getAuthorizedDocument = async (
   documentId,
   currentUser,
   requireAccess = true,
+  { includeDeleted = false } = {},
 ) => {
   await caseService.getCaseById(caseId, currentUser);
   const document = await documentRepository.findDocumentById(documentId);
-  if (!document || document.caseId !== caseId || document.deletedAt)
+  if (
+    !document ||
+    document.caseId !== caseId ||
+    (!includeDeleted && document.deletedAt)
+  )
     throw new ApiError(404, "Document not found.");
   if (requireAccess && !(await hasDocumentAccess(document, currentUser)))
     throw new ApiError(403, "You do not have access to this document.");
@@ -341,64 +347,129 @@ const bulkUploadDocuments = async (caseId, data, files, currentUser) => {
   }
 };
 
-const getDocuments = async (caseId, query, currentUser) => {
-  await caseService.getCaseById(caseId, currentUser);
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const categoryFilterFromQuery = (query) => {
+  if (query.categoryId) return { categoryId: query.categoryId };
+  if (!query.category) return {};
+  if (UUID_RE.test(query.category)) return { categoryId: query.category };
+  return {
+    category: { name: { equals: query.category, mode: "insensitive" } },
+  };
+};
+
+const nonManagerDocumentVisibilityOr = (currentUser) => [
+  { uploadedByUserId: currentUser.id },
+  {
+    visibility: "ALL_AUTHORIZED_PARTICIPANTS",
+    case: {
+      participants: {
+        some: { userId: currentUser.id, accessStatus: "ACTIVE" },
+      },
+    },
+  },
+  {
+    visibility: "NEUTRAL_ONLY",
+    case: {
+      participants: {
+        some: {
+          userId: currentUser.id,
+          role: "NEUTRAL",
+          accessStatus: "ACTIVE",
+        },
+      },
+    },
+  },
+  {
+    visibility: "SPECIFIC_PARTY_LAWYER_CLIENT",
+    accessGrants: {
+      some: {
+        caseParticipant: { userId: currentUser.id, accessStatus: "ACTIVE" },
+      },
+    },
+  },
+  ...(currentUser.role?.name === "ACCOUNTING_STAFF"
+    ? [{ visibility: "ACCOUNTING_FINANCE" }]
+    : []),
+];
+
+const formatPersonName = (user) => {
+  if (!user) return null;
+  const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+  return name || user.email || null;
+};
+
+const mapDocumentStatus = (document) => {
+  if (document.deletedAt) return "Archived";
+  if (document.processingStatus === "COMPLETED") return "Completed";
+  if (document.processingStatus === "FAILED") return "Failed";
+  if (document.processingStatus === "PENDING") return "Pending";
+  return document.processingStatus || "Pending";
+};
+
+const mapHubDocument = (document) => {
+  const versionNumber = document.currentVersion?.versionNumber ?? null;
+  return {
+    id: document.id,
+    caseId: document.caseId,
+    caseNumber: document.case?.caseNumber ?? null,
+    caseTitle: document.case?.title ?? null,
+    name: document.name,
+    title: document.name,
+    category: document.category?.name ?? null,
+    categoryId: document.category?.id ?? null,
+    tags: (document.tags || []).map((tag) => tag.name),
+    uploadedBy: document.uploadedBy,
+    uploadedByName: formatPersonName(document.uploadedBy),
+    uploadedByRole: document.uploadedBy?.role?.name ?? null,
+    createdAt: document.createdAt,
+    uploadDate: document.createdAt,
+    fileType: document.currentVersion?.mimeType ?? null,
+    fileSize: document.currentVersion?.fileSizeBytes ?? null,
+    visibility: document.visibility,
+    processingStatus: document.processingStatus,
+    status: mapDocumentStatus(document),
+    deletedAt: document.deletedAt,
+    version: versionNumber == null ? null : Number(versionNumber).toFixed(1),
+    versionNumber,
+  };
+};
+
+const mapDocumentDetail = (document) => ({
+  ...document,
+  caseNumber: document.case?.caseNumber ?? null,
+  caseTitle: document.case?.title ?? null,
+  categoryName: document.category?.name ?? null,
+  tags: (document.tags || []).map((tag) =>
+    typeof tag === "string" ? tag : tag.name,
+  ),
+  uploadedByName: formatPersonName(document.uploadedBy),
+  uploadedByRole: document.uploadedBy?.role?.name ?? null,
+  status: mapDocumentStatus(document),
+  isArchived: Boolean(document.deletedAt),
+  permissionsSummary: {
+    visibility: document.visibility,
+    recipientParticipantIds: (document.accessGrants || []).map(
+      (grant) => grant.caseParticipantId,
+    ),
+  },
+});
+
+const paginateDocuments = async (where, query, hub = false) => {
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 20;
-  const where = {
-    caseId,
-    deletedAt: null,
-    ...(query.categoryId && { categoryId: query.categoryId }),
-    ...(query.visibility && { visibility: query.visibility }),
-    ...(query.reviewStatus && { reviewStatus: query.reviewStatus }),
-    ...(query.search && {
-      name: { contains: query.search, mode: "insensitive" },
-    }),
-  };
-  if (!isManager(currentUser)) {
-    where.OR = [
-      { uploadedByUserId: currentUser.id },
-      {
-        visibility: "ALL_AUTHORIZED_PARTICIPANTS",
-        case: {
-          participants: {
-            some: { userId: currentUser.id, accessStatus: "ACTIVE" },
-          },
-        },
-      },
-      {
-        visibility: "NEUTRAL_ONLY",
-        case: {
-          participants: {
-            some: {
-              userId: currentUser.id,
-              role: "NEUTRAL",
-              accessStatus: "ACTIVE",
-            },
-          },
-        },
-      },
-      {
-        visibility: "SPECIFIC_PARTY_LAWYER_CLIENT",
-        accessGrants: {
-          some: {
-            caseParticipant: { userId: currentUser.id, accessStatus: "ACTIVE" },
-          },
-        },
-      },
-      ...(currentUser.role?.name === "ACCOUNTING_STAFF"
-        ? [{ visibility: "ACCOUNTING_FINANCE" }]
-        : []),
-    ];
-  }
   const [documents, total] = await documentRepository.getDocuments({
     where,
     skip: (page - 1) * limit,
     take: limit,
+    hub,
   });
-  const totalPages = Math.ceil(total / limit);
+  const totalPages = Math.ceil(total / limit) || 1;
   return {
-    documents,
+    documents: hub
+      ? documents.map(mapHubDocument)
+      : documents.map(mapDocumentDetail),
     pagination: {
       page,
       limit,
@@ -410,12 +481,107 @@ const getDocuments = async (caseId, query, currentUser) => {
   };
 };
 
-const getDocument = async (caseId, documentId, currentUser) => {
-  const document = await getAuthorizedDocument(caseId, documentId, currentUser);
-  await prisma.documentAccessLog.create({
-    data: { documentId, accessedByUserId: currentUser.id, action: "VIEWED" },
-  });
-  return document;
+const buildDocumentSearchOr = (search) => {
+  if (!search) return undefined;
+  return [
+    { name: { contains: search, mode: "insensitive" } },
+    { case: { caseNumber: { contains: search, mode: "insensitive" } } },
+    { case: { title: { contains: search, mode: "insensitive" } } },
+    {
+      uploadedBy: {
+        OR: [
+          { firstName: { contains: search, mode: "insensitive" } },
+          { lastName: { contains: search, mode: "insensitive" } },
+          { email: { contains: search, mode: "insensitive" } },
+        ],
+      },
+    },
+    { tags: { some: { name: { contains: search, mode: "insensitive" } } } },
+    {
+      currentVersion: {
+        mimeType: { contains: search, mode: "insensitive" },
+      },
+    },
+  ];
+};
+
+const getDocuments = async (caseId, query, currentUser) => {
+  await caseService.getCaseById(caseId, currentUser);
+  const where = {
+    caseId,
+    deletedAt: null,
+    ...(query.categoryId && { categoryId: query.categoryId }),
+    ...(query.visibility && { visibility: query.visibility }),
+    ...(query.reviewStatus && { reviewStatus: query.reviewStatus }),
+    ...(query.processingStatus && {
+      processingStatus: query.processingStatus,
+    }),
+    ...(query.search && { OR: buildDocumentSearchOr(query.search) }),
+  };
+  if (!isManager(currentUser)) {
+    where.AND = [...(where.AND || []), { OR: nonManagerDocumentVisibilityOr(currentUser) }];
+  }
+  return paginateDocuments(where, query, false);
+};
+
+const listDocumentsHub = async (query, currentUser) => {
+  const caseScope = accessibleCaseWhere(currentUser);
+  const and = [];
+  if (Object.keys(caseScope).length) and.push({ case: caseScope });
+  if (!isManager(currentUser)) {
+    and.push({ OR: nonManagerDocumentVisibilityOr(currentUser) });
+  }
+  if (query.includeDeleted === true || query.includeDeleted === "true") {
+    // managers may include archived in hub
+  } else {
+    and.push({ deletedAt: null });
+  }
+
+  const where = {
+    ...(query.caseId && { caseId: query.caseId }),
+    ...(query.visibility && { visibility: query.visibility }),
+    ...(query.processingStatus && {
+      processingStatus: query.processingStatus,
+    }),
+    ...(query.uploadedByUserId && {
+      uploadedByUserId: query.uploadedByUserId,
+    }),
+    ...(query.fileType && {
+      currentVersion: {
+        mimeType: { contains: query.fileType, mode: "insensitive" },
+      },
+    }),
+    ...((query.dateFrom || query.dateTo) && {
+      createdAt: {
+        ...(query.dateFrom ? { gte: new Date(query.dateFrom) } : {}),
+        ...(query.dateTo ? { lte: new Date(query.dateTo) } : {}),
+      },
+    }),
+    ...categoryFilterFromQuery(query),
+    ...(query.search && { OR: buildDocumentSearchOr(query.search) }),
+    ...(and.length && { AND: and }),
+  };
+  return paginateDocuments(where, query, true);
+};
+
+const getDocument = async (caseId, documentId, currentUser, query = {}) => {
+  const includeDeleted =
+    query.includeDeleted === true ||
+    query.includeDeleted === "true" ||
+    isManager(currentUser);
+  const document = await getAuthorizedDocument(
+    caseId,
+    documentId,
+    currentUser,
+    true,
+    { includeDeleted },
+  );
+  if (!document.deletedAt) {
+    await prisma.documentAccessLog.create({
+      data: { documentId, accessedByUserId: currentUser.id, action: "VIEWED" },
+    });
+  }
+  return mapDocumentDetail(document);
 };
 
 const uploadNewVersion = async (
@@ -566,19 +732,39 @@ const softDeleteDocument = async (caseId, documentId, reason, currentUser) => {
 };
 
 const getDocumentVersions = async (caseId, documentId, currentUser) => {
-  await getAuthorizedDocument(caseId, documentId, currentUser);
-  return documentRepository.getVersions(documentId);
+  await getAuthorizedDocument(caseId, documentId, currentUser, true, {
+    includeDeleted: isManager(currentUser),
+  });
+  const versions = await documentRepository.getVersions(documentId);
+  return versions.map((version) => ({
+    ...version,
+    version: Number(version.versionNumber).toFixed(1),
+    notes: version.changesNotes,
+    fileSize: version.fileSizeBytes,
+    uploadedOn: version.createdAt,
+    uploadedByName: version.uploadedBy
+      ? [version.uploadedBy.firstName, version.uploadedBy.lastName]
+          .filter(Boolean)
+          .join(" ")
+          .trim() || version.uploadedBy.email
+      : null,
+  }));
 };
 
-const downloadDocument = async (caseId, documentId, currentUser) => {
+const downloadDocument = async (
+  caseId,
+  documentId,
+  currentUser,
+  versionId = null,
+) => {
   const document = await getAuthorizedDocument(caseId, documentId, currentUser);
-  if (!document.currentVersion)
-    throw new ApiError(404, "Document version not found.");
+  let version = document.currentVersion;
+  if (versionId) {
+    version = await documentRepository.findVersionById(documentId, versionId);
+  }
+  if (!version) throw new ApiError(404, "Document version not found.");
   const expiresIn = 300;
-  const downloadUrl = await getSignedDownloadUrl(
-    document.currentVersion.fileKey,
-    expiresIn,
-  );
+  const downloadUrl = await getSignedDownloadUrl(version.fileKey, expiresIn);
   await prisma.documentAccessLog.create({
     data: {
       documentId,
@@ -589,6 +775,8 @@ const downloadDocument = async (caseId, documentId, currentUser) => {
   return {
     downloadUrl,
     expiresIn,
+    versionId: version.id,
+    versionNumber: version.versionNumber,
   };
 };
 
@@ -598,7 +786,9 @@ const getDocumentAccessLogs = async (
   query,
   currentUser,
 ) => {
-  const document = await getAuthorizedDocument(caseId, documentId, currentUser);
+  const document = await getAuthorizedDocument(caseId, documentId, currentUser, true, {
+    includeDeleted: isManager(currentUser),
+  });
   if (!isManager(currentUser) && document.uploadedByUserId !== currentUser.id)
     throw new ApiError(403, "You do not have permission to view access logs.");
   const page = Number(query.page) || 1;
@@ -607,9 +797,23 @@ const getDocumentAccessLogs = async (
     documentId,
     (page - 1) * limit,
     limit,
+    {
+      action: query.action,
+      dateFrom: query.dateFrom,
+      dateTo: query.dateTo,
+    },
   );
   return {
-    accessLogs,
+    accessLogs: accessLogs.map((log) => ({
+      ...log,
+      role: log.accessedBy?.role?.name ?? null,
+      accessedByName: log.accessedBy
+        ? [log.accessedBy.firstName, log.accessedBy.lastName]
+            .filter(Boolean)
+            .join(" ")
+            .trim() || log.accessedBy.email
+        : null,
+    })),
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
   };
 };
@@ -618,6 +822,7 @@ module.exports = {
   uploadDocument,
   bulkUploadDocuments,
   getDocuments,
+  listDocumentsHub,
   getDocument,
   uploadNewVersion,
   updateVisibility,

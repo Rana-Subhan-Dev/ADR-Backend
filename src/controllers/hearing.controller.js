@@ -73,6 +73,17 @@ const listHearingsHub = asyncHandler(async (req, res) =>
       ),
     ),
 );
+const getHearingById = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await hearingService.getHearingById(req.params.hearingId, req.user),
+        "Hearing fetched successfully.",
+      ),
+    ),
+);
 const getHearing = asyncHandler(async (req, res) =>
   res
     .status(200)
@@ -101,6 +112,22 @@ const updateHearing = asyncHandler(async (req, res) =>
           req.user,
         ),
         "Hearing updated successfully.",
+      ),
+    ),
+);
+const updateAttendance = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await hearingService.updateAttendance(
+          req.params.caseId,
+          req.params.hearingId,
+          req.body,
+          req.user,
+        ),
+        "Hearing attendance updated successfully.",
       ),
     ),
 );
@@ -189,8 +216,10 @@ module.exports = {
   scheduleHearing,
   getHearings,
   listHearingsHub,
+  getHearingById,
   getHearing,
   updateHearing,
+  updateAttendance,
   rescheduleHearing,
   cancelHearing,
   retryZoom,

@@ -10,6 +10,7 @@ const {
   putObjectBuffer,
   getSignedDownloadUrl,
 } = require("../utils/s3Helper");
+const notificationService = require("./notification.service");
 
 const managerRoles = ["SUPER_ADMIN", "ADMIN_LEADERSHIP", "CASE_MANAGER"];
 const isManager = (user) => managerRoles.includes(user.role?.name);
@@ -34,19 +35,55 @@ const paginate = (envelopes, total, page, limit) => ({
   },
 });
 
+const formatPersonName = (user) => {
+  if (!user) return null;
+  const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+  return name || user.email || null;
+};
+
+const PENDING_RECIPIENT_STATUSES = new Set(["SENT", "DELIVERED"]);
+const TERMINAL_ENVELOPE_STATUSES = new Set([
+  "COMPLETED",
+  "DECLINED",
+  "FAILED",
+  "EXPIRED",
+]);
+
 const decorateEnvelope = (envelope, extras = {}) => {
   if (!envelope) return envelope;
+  const senderName = formatPersonName(envelope.sentBy);
+  const recipients = (envelope.recipients || []).map((recipient) => ({
+    ...recipient,
+    caseParticipantId:
+      recipient.caseParticipantId ||
+      recipient.caseParticipant?.id ||
+      null,
+  }));
+  const activity = (envelope.events || []).map((event) => ({
+    ...event,
+    title: event.message || event.eventType,
+    timestamp: event.occurredAt || event.createdAt,
+  }));
+  const lastEvent = activity[activity.length - 1] || null;
+
   return {
     ...envelope,
+    recipients,
+    recipientList: recipients,
     documentName: envelope.sourceDocument?.name || null,
     signedDocumentName: envelope.signedDocument?.name || null,
     canDownloadSigned: Boolean(
       envelope.status === "COMPLETED" && envelope.signedDocumentId,
     ),
-    recipientSummary: (envelope.recipients || [])
+    recipientSummary: recipients
       .map((r) => r.name)
       .filter(Boolean)
       .join(", "),
+    template: envelope.templateName || null,
+    sender: senderName,
+    activity,
+    lastActivity: lastEvent?.timestamp || envelope.updatedAt || null,
+    lastActivityAt: lastEvent?.timestamp || envelope.updatedAt || null,
     ...extras,
   };
 };
@@ -195,13 +232,62 @@ const assertRecipients = async (caseId, recipients, tx = prisma) => {
   }
 };
 
+const enrichRecipientsWithParticipants = async (caseId, envelope) => {
+  const recipients = envelope.recipients || [];
+  const missingEmails = recipients
+    .filter((r) => !r.caseParticipantId && r.email)
+    .map((r) => r.email.toLowerCase());
+  if (!missingEmails.length) return envelope;
+
+  const participants = await prisma.caseParticipant.findMany({
+    where: {
+      caseId,
+      accessStatus: "ACTIVE",
+      OR: missingEmails.map((email) => ({
+        user: { email: { equals: email, mode: "insensitive" } },
+      })),
+    },
+    select: {
+      id: true,
+      user: { select: { email: true } },
+    },
+  });
+  const byEmail = new Map(
+    participants.map((p) => [p.user.email.toLowerCase(), p.id]),
+  );
+
+  return {
+    ...envelope,
+    recipients: recipients.map((recipient) => {
+      if (recipient.caseParticipantId || !recipient.email) return recipient;
+      const matched = byEmail.get(recipient.email.toLowerCase());
+      return matched
+        ? { ...recipient, caseParticipantId: matched }
+        : recipient;
+    }),
+  };
+};
+
 const getEnvelope = async (caseId, envelopeRecordId, currentUser) => {
   await caseService.getCaseById(caseId, currentUser);
   const envelope = await docusignRepository.findById(envelopeRecordId);
   if (!envelope || envelope.caseId !== caseId)
     throw new ApiError(404, "DocuSign envelope not found.");
   assertCanViewEnvelope(envelope, currentUser);
-  return decorateEnvelope(envelope);
+  const enriched = await enrichRecipientsWithParticipants(caseId, envelope);
+  return decorateEnvelope(enriched);
+};
+
+const getEnvelopeByExternalId = async (caseId, envelopeId, currentUser) => {
+  await caseService.getCaseById(caseId, currentUser);
+  const envelope = await docusignRepository.findByDocusignEnvelopeId(
+    envelopeId,
+  );
+  if (!envelope || envelope.caseId !== caseId)
+    throw new ApiError(404, "DocuSign envelope not found.");
+  assertCanViewEnvelope(envelope, currentUser);
+  const enriched = await enrichRecipientsWithParticipants(caseId, envelope);
+  return decorateEnvelope(enriched);
 };
 
 const getEnvelopes = async (caseId, query, currentUser) => {
@@ -351,6 +437,24 @@ const sendEnvelope = async (caseId, data, currentUser) => {
       },
     });
 
+    await notificationService.notifyCaseManagers(
+      caseId,
+      {
+        eventType: "DOCUSIGN_SENT",
+        subject: `DocuSign sent: ${sourceDocument.name}`,
+        relatedRecordType: "DocuSignEnvelope",
+        relatedRecordId: envelope.id,
+        templateData: {
+          title: "DocuSign envelope sent",
+          message: `${sourceDocument.name} was sent for signature.`,
+          kind: "DOCUSIGN_SENT",
+          caseId,
+          href: `/case-manager/docusign/${envelope.id}`,
+        },
+      },
+      { excludeUserId: currentUser.id, tx },
+    );
+
     return decorateEnvelope(await docusignRepository.findById(envelope.id, tx));
   });
 };
@@ -358,11 +462,21 @@ const sendEnvelope = async (caseId, data, currentUser) => {
 const remindEnvelope = async (caseId, envelopeRecordId, currentUser) => {
   const envelope = await getEnvelope(caseId, envelopeRecordId, currentUser);
   assertCanManage(currentUser);
-  if (envelope.status !== "SENT")
+  if (TERMINAL_ENVELOPE_STATUSES.has(envelope.status))
     throw new ApiError(
       400,
-      "Reminders can only be sent for envelopes in SENT status.",
+      "Reminders cannot be sent for completed, declined, failed, or expired envelopes.",
     );
+  if (envelope.status !== "SENT" && envelope.status !== "PENDING")
+    throw new ApiError(
+      400,
+      "Reminders can only be sent for envelopes that are still in progress.",
+    );
+  const pending = (envelope.recipients || []).filter((r) =>
+    PENDING_RECIPIENT_STATUSES.has(r.status),
+  );
+  if (!pending.length)
+    throw new ApiError(400, "No pending recipients to remind.");
   if (!envelope.envelopeId)
     throw new ApiError(400, "Envelope has no DocuSign envelope id.");
 
@@ -374,18 +488,92 @@ const remindEnvelope = async (caseId, envelopeRecordId, currentUser) => {
       { lastReminderSentAt: new Date() },
       tx,
     );
+    const message = `Reminder sent to ${pending.length} recipient(s).`;
     await addEvent(
       tx,
       envelope.id,
       "REMINDER_SENT",
-      "Reminder sent to recipients.",
+      message,
       currentUser.email,
+    );
+    await writeTimeline(
+      tx,
+      envelope,
+      currentUser,
+      "DOCUSIGN_SENT",
+      `DocuSign Reminder Sent: ${message}`,
+      null,
+      { action: "REMINDER_SENT", pendingCount: pending.length },
     );
     await writeAudit(tx, currentUser, "EDIT", updated, null, {
       action: "REMINDER_SENT",
     });
     return decorateEnvelope(await docusignRepository.findById(envelope.id, tx));
   });
+};
+
+const retryEnvelope = async (caseId, envelopeRecordId, currentUser) => {
+  const envelope = await getEnvelope(caseId, envelopeRecordId, currentUser);
+  assertCanManage(currentUser);
+  if (!["DECLINED", "FAILED"].includes(envelope.status)) {
+    throw new ApiError(
+      400,
+      "Retry is only available for declined or failed envelopes.",
+    );
+  }
+  if (!envelope.sourceDocumentId) {
+    throw new ApiError(400, "Original source document is missing.");
+  }
+  const recipients = (envelope.recipients || []).map((recipient, index) => ({
+    name: recipient.name,
+    role: recipient.role || null,
+    email: recipient.email,
+    routingOrder: recipient.routingOrder || index + 1,
+    caseParticipantId: recipient.caseParticipantId || null,
+    attorneyId: recipient.attorneyId || null,
+    casePartyId: recipient.casePartyId || null,
+  }));
+  if (!recipients.length) {
+    throw new ApiError(400, "Original envelope has no recipients to retry.");
+  }
+
+  const retried = await sendEnvelope(
+    caseId,
+    {
+      sourceDocumentId: envelope.sourceDocumentId,
+      templateId: envelope.templateId || null,
+      templateName: envelope.templateName || null,
+      emailSubject: `Retry: Please sign ${envelope.documentName || "Agreement"}`,
+      dueDate: envelope.dueDate || null,
+      recipients,
+    },
+    currentUser,
+  );
+
+  await runTransaction(async (tx) => {
+    await addEvent(
+      tx,
+      envelope.id,
+      "ENVELOPE_RETRY",
+      `Retry created as envelope ${retried.id}.`,
+      currentUser.email,
+      { retriedEnvelopeId: retried.id },
+    );
+    await writeTimeline(
+      tx,
+      envelope,
+      currentUser,
+      "DOCUSIGN_SENT",
+      `DocuSign envelope retried (new envelope ${retried.id}).`,
+      { status: envelope.status },
+      { retriedEnvelopeId: retried.id },
+    );
+  });
+
+  return {
+    previousEnvelopeId: envelope.id,
+    envelope: retried,
+  };
 };
 
 const getSignedPdfDownload = async (
@@ -489,8 +677,13 @@ const mapDsEnvelopeStatus = (status) => {
 
 const mapDsRecipientStatus = (status) => {
   const normalized = String(status || "").toLowerCase();
-  if (normalized === "completed" || normalized === "signed") return "COMPLETED";
+  if (normalized === "completed") return "COMPLETED";
+  if (normalized === "signed") return "SIGNED";
+  if (normalized === "delivered") return "DELIVERED";
   if (normalized === "declined") return "DECLINED";
+  if (normalized.includes("fail") || normalized === "autoresponded")
+    return "FAILED";
+  if (normalized === "sent" || normalized === "created") return "SENT";
   return "SENT";
 };
 
@@ -660,6 +853,38 @@ const handleWebhook = async (payload, rawBody, signatureHeader) => {
           { status: envelope.status },
           { status: "COMPLETED", signedDocumentId },
         );
+        await notificationService.notifyCaseManagers(envelope.caseId, {
+          eventType: "DOCUSIGN_COMPLETED",
+          subject: "DocuSign envelope completed",
+          relatedRecordType: "DocuSignEnvelope",
+          relatedRecordId: envelope.id,
+          templateData: {
+            title: "DocuSign completed",
+            message: "All recipients have signed the envelope.",
+            kind: "DOCUSIGN_COMPLETED",
+            caseId: envelope.caseId,
+            href: `/case-manager/docusign/${envelope.id}`,
+          },
+        }, { tx });
+        if (envelope.sentByUserId) {
+          await notificationService.createInAppNotification(
+            {
+              recipientUserId: envelope.sentByUserId,
+              eventType: "DOCUSIGN_COMPLETED",
+              subject: "DocuSign envelope completed",
+              relatedRecordType: "DocuSignEnvelope",
+              relatedRecordId: envelope.id,
+              templateData: {
+                title: "DocuSign completed",
+                message: "All recipients have signed the envelope.",
+                kind: "DOCUSIGN_COMPLETED",
+                caseId: envelope.caseId,
+                href: `/case-manager/docusign/${envelope.id}`,
+              },
+            },
+            tx,
+          );
+        }
       });
     } catch (error) {
       await docusignRepository.update(envelope.id, {
@@ -677,7 +902,9 @@ module.exports = {
   sendEnvelope,
   getEnvelopes,
   getEnvelope,
+  getEnvelopeByExternalId,
   remindEnvelope,
+  retryEnvelope,
   getSignedPdfDownload,
   getSourcePdfDownload,
   getRecipientSigningUrl,

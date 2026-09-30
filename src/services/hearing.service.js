@@ -3,6 +3,7 @@ const prisma = require("../config/prisma");
 const { runTransaction } = require("../config/prisma");
 const hearingRepository = require("../repositories/hearing.repository");
 const caseService = require("./case.service");
+const { accessibleCaseRelationWhere } = require("../utils/caseAccess");
 const zoomClient = require("./zoomClient.service");
 const {
   sendHearingCalendarInvites,
@@ -113,6 +114,160 @@ const buildConflictError = ({
 
 const createUtcDateTime = (date, time) => new Date(`${date}T${time}:00.000Z`);
 
+const formatPersonName = (user) => {
+  if (!user) return null;
+  const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+  return name || user.email || null;
+};
+
+const HEARING_TYPE_LABELS = {
+  MEDIATION_SESSION: "Mediation Session",
+  ARBITRATION_HEARING: "Arbitration Hearing",
+  STATUS_CONFERENCE: "Status Conference",
+  CUSTOM: "Custom",
+};
+
+const HEARING_TYPE_ALIASES = {
+  PRELIMINARY_CONFERENCE: "STATUS_CONFERENCE",
+  "PRELIMINARY CONFERENCE": "STATUS_CONFERENCE",
+  PRELIMINARY: "STATUS_CONFERENCE",
+};
+
+const CONFLICT_ALIASES = {
+  clear: "CLEAR",
+  review: "NEEDS_REVIEW",
+  needs_review: "NEEDS_REVIEW",
+  "needs-review": "NEEDS_REVIEW",
+  conflict: "CONFLICT",
+};
+
+const ZOOM_ALIASES = {
+  ready: ["CREATED", "MANUALLY_LINKED"],
+  setup: ["PENDING", "FAILED", "NOT_REQUIRED"],
+  created: "CREATED",
+  pending: "PENDING",
+  failed: "FAILED",
+  manually_linked: "MANUALLY_LINKED",
+  "manually-linked": "MANUALLY_LINKED",
+  not_required: "NOT_REQUIRED",
+};
+
+const CALENDAR_ALIASES = {
+  synced: "SYNCED",
+  failed: "FAILED",
+  pending: "PENDING",
+  not_synced: "NOT_SYNCED",
+  "not-synced": "NOT_SYNCED",
+};
+
+const statusLabelPair = (value, labels = {}) =>
+  value
+    ? { value, label: labels[value] || String(value).replace(/_/g, " ") }
+    : null;
+
+const ZOOM_LABELS = {
+  NOT_REQUIRED: "Not required",
+  PENDING: "Pending",
+  CREATED: "Ready",
+  FAILED: "Failed",
+  MANUALLY_LINKED: "Ready (manual)",
+};
+
+const CALENDAR_LABELS = {
+  SYNCED: "Synced",
+  PENDING: "Pending",
+  FAILED: "Failed",
+  NOT_SYNCED: "Not synced",
+};
+
+const CONFLICT_LABELS = {
+  CLEAR: "Clear",
+  NEEDS_REVIEW: "Needs review",
+  CONFLICT: "Conflict",
+};
+
+const startOfUtcDay = (date) => {
+  const d = new Date(date);
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+};
+
+const addUtcDays = (date, days) => {
+  const d = new Date(date);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d;
+};
+
+const normalizeHearingQuery = (query = {}) => {
+  const next = { ...query };
+
+  if (next.type) {
+    const raw = String(next.type).trim();
+    const upper = raw.toUpperCase().replace(/[\s-]+/g, "_");
+    next.type = HEARING_TYPE_ALIASES[upper] || HEARING_TYPE_ALIASES[raw.toUpperCase()] || upper;
+  }
+
+  if (next.conflictStatus) {
+    const key = String(next.conflictStatus).trim().toLowerCase();
+    next.conflictStatus =
+      CONFLICT_ALIASES[key] || String(next.conflictStatus).toUpperCase();
+  }
+
+  if (next.zoomStatus) {
+    const key = String(next.zoomStatus).trim().toLowerCase();
+    next.zoomStatus = ZOOM_ALIASES[key] || String(next.zoomStatus).toUpperCase();
+  }
+
+  if (next.calendarSyncStatus) {
+    const key = String(next.calendarSyncStatus).trim().toLowerCase();
+    next.calendarSyncStatus =
+      CALENDAR_ALIASES[key] || String(next.calendarSyncStatus).toUpperCase();
+  }
+
+  const preset = String(next.datePreset || next.range || "").toLowerCase();
+  if (preset && !next.hearingDateFrom && !next.from && !next.dateFrom) {
+    const start = startOfUtcDay(new Date());
+    if (preset === "today") {
+      next.hearingDateFrom = start.toISOString();
+      next.hearingDateTo = addUtcDays(start, 1).toISOString();
+    } else if (preset === "week") {
+      next.hearingDateFrom = start.toISOString();
+      next.hearingDateTo = addUtcDays(start, 7).toISOString();
+    } else if (preset === "month") {
+      next.hearingDateFrom = start.toISOString();
+      next.hearingDateTo = addUtcDays(start, 30).toISOString();
+    }
+  }
+
+  return next;
+};
+
+const mapAttendee = (attendee) => {
+  const user = attendee.caseParticipant?.user;
+  const party = attendee.caseParticipant?.caseParty;
+  return {
+    id: attendee.id,
+    caseParticipantId: attendee.caseParticipant?.id || null,
+    role: attendee.caseParticipant?.role || null,
+    side: attendee.side || party?.side || null,
+    attendanceStatus: attendee.attendanceStatus || null,
+    notes: attendee.notes || null,
+    name: formatPersonName(user),
+    email: user?.email || null,
+    phone: user?.phone || null,
+    organizationName: party?.organizationName || null,
+    user: user
+      ? {
+          id: user.id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          phone: user.phone || null,
+        }
+      : null,
+  };
+};
+
 const sanitizeHearing = (hearing, currentUser) => {
   if (!hearing) return hearing;
   const role = currentUser.role?.name;
@@ -123,8 +278,32 @@ const sanitizeHearing = (hearing, currentUser) => {
     hearing.zoomStatus,
   );
 
+  const attendees = (hearing.attendees || []).map(mapAttendee);
+  const presentCount = attendees.filter(
+    (attendee) => attendee.attendanceStatus === "PRESENT",
+  ).length;
+  const neutrals = attendees.filter((attendee) => attendee.role === "NEUTRAL");
+  const primaryNeutral = neutrals[0] || null;
+
   return {
     ...hearing,
+    attendees,
+    hearingTypeLabel: HEARING_TYPE_LABELS[hearing.type] || hearing.type,
+    outcomeNotes: hearing.outcomeNotes ?? null,
+    assignedNeutral: primaryNeutral
+      ? {
+          caseParticipantId: primaryNeutral.caseParticipantId,
+          name: primaryNeutral.name,
+          email: primaryNeutral.email,
+          phone: primaryNeutral.phone,
+          role: primaryNeutral.role,
+        }
+      : null,
+    presentCount,
+    attendeeCount: attendees.length,
+    meeting: statusLabelPair(hearing.zoomStatus, ZOOM_LABELS),
+    calendar: statusLabelPair(hearing.calendarSyncStatus, CALENDAR_LABELS),
+    conflict: statusLabelPair(hearing.conflictStatus, CONFLICT_LABELS),
     zoomJoinUrl: canSeeJoin && joinAllowed ? hearing.zoomJoinUrl : null,
     zoomPasscode: canSeeJoin && joinAllowed ? hearing.zoomPasscode : null,
     zoomStartUrl: canSeeStart ? hearing.zoomStartUrl : null,
@@ -138,6 +317,29 @@ const sanitizeHearing = (hearing, currentUser) => {
       calendarSyncStatus: hearing.calendarSyncStatus,
       conflictStatus: hearing.conflictStatus,
     },
+  };
+};
+
+const mapHearingListItem = (hearing, currentUser) => {
+  const base = sanitizeHearing(hearing, currentUser);
+  const neutralNames = (base.attendees || [])
+    .filter((attendee) => attendee.role === "NEUTRAL")
+    .map((attendee) => attendee.name)
+    .filter(Boolean);
+
+  return {
+    ...base,
+    caseNumber: hearing.case?.caseNumber ?? null,
+    caseTitle: hearing.case?.title ?? null,
+    hearingDate: hearing.hearingDate ?? null,
+    location: hearing.location ?? null,
+    durationMinutes: hearing.durationMinutes ?? null,
+    hearingStatus: hearing.hearingStatus,
+    type: hearing.type,
+    title: hearing.title,
+    neutralNames,
+    neutralName: neutralNames[0] ?? null,
+    participantCount: hearing.attendees?.length ?? 0,
   };
 };
 
@@ -348,6 +550,8 @@ const applyCalendarInvites = async (hearing, method = "REQUEST") => {
 
 const scheduleHearing = async (caseId, data, currentUser) => {
   await caseService.getCaseById(caseId, currentUser);
+  const normalized = normalizeHearingQuery({ type: data.type });
+  const hearingType = normalized.type;
   const durationMinutes = durationFromRange(
     data.startTime,
     data.endTime,
@@ -400,7 +604,7 @@ const scheduleHearing = async (caseId, data, currentUser) => {
         {
           hearingReference: createReference(),
           caseId,
-          type: data.type,
+          type: hearingType,
           title: data.title,
           format: data.format,
           location: data.location || null,
@@ -505,12 +709,17 @@ const scheduleHearing = async (caseId, data, currentUser) => {
   );
 };
 
-const buildHearingWhere = (query, caseScope) => {
+const buildHearingWhere = (rawQuery, caseScope) => {
+  const query = normalizeHearingQuery(rawQuery);
   const where = { ...caseScope };
   if (query.hearingStatus) where.hearingStatus = query.hearingStatus;
   if (query.type) where.type = query.type;
   if (query.format) where.format = query.format;
-  if (query.zoomStatus) where.zoomStatus = query.zoomStatus;
+  if (query.zoomStatus) {
+    where.zoomStatus = Array.isArray(query.zoomStatus)
+      ? { in: query.zoomStatus }
+      : query.zoomStatus;
+  }
   if (query.calendarSyncStatus)
     where.calendarSyncStatus = query.calendarSyncStatus;
   if (query.conflictStatus) where.conflictStatus = query.conflictStatus;
@@ -529,28 +738,43 @@ const buildHearingWhere = (query, caseScope) => {
       },
     };
   }
-  if (query.from || query.to || query.dateFrom || query.dateTo) {
+  const hearingDateFrom =
+    query.hearingDateFrom || query.from || query.dateFrom;
+  const hearingDateTo = query.hearingDateTo || query.to || query.dateTo;
+  if (hearingDateFrom || hearingDateTo) {
     where.startTime = {
-      ...(query.from || query.dateFrom
-        ? { gte: new Date(query.from || query.dateFrom) }
-        : {}),
-      ...(query.to || query.dateTo
-        ? { lte: new Date(query.to || query.dateTo) }
-        : {}),
+      ...(hearingDateFrom ? { gte: new Date(hearingDateFrom) } : {}),
+      ...(hearingDateTo ? { lte: new Date(hearingDateTo) } : {}),
     };
   }
   if (query.search) {
+    const term = query.search;
     where.OR = [
-      { title: { contains: query.search, mode: "insensitive" } },
-      { hearingReference: { contains: query.search, mode: "insensitive" } },
-      { case: { caseNumber: { contains: query.search, mode: "insensitive" } } },
-      { case: { title: { contains: query.search, mode: "insensitive" } } },
+      { title: { contains: term, mode: "insensitive" } },
+      { hearingReference: { contains: term, mode: "insensitive" } },
+      { case: { caseNumber: { contains: term, mode: "insensitive" } } },
+      { case: { title: { contains: term, mode: "insensitive" } } },
+      {
+        attendees: {
+          some: {
+            caseParticipant: {
+              user: {
+                OR: [
+                  { firstName: { contains: term, mode: "insensitive" } },
+                  { lastName: { contains: term, mode: "insensitive" } },
+                  { email: { contains: term, mode: "insensitive" } },
+                ],
+              },
+            },
+          },
+        },
+      },
     ];
   }
   return where;
 };
 
-const paginateHearings = async (where, query, currentUser) => {
+const paginateHearings = async (where, query, currentUser, { listShape = false } = {}) => {
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 10;
   const [hearings, total] = await hearingRepository.getHearings({
@@ -559,8 +783,9 @@ const paginateHearings = async (where, query, currentUser) => {
     take: limit,
   });
   const totalPages = Math.ceil(total / limit) || 1;
+  const mapItem = listShape ? mapHearingListItem : sanitizeHearing;
   return {
-    hearings: hearings.map((hearing) => sanitizeHearing(hearing, currentUser)),
+    hearings: hearings.map((hearing) => mapItem(hearing, currentUser)),
     pagination: {
       page,
       limit,
@@ -574,24 +799,22 @@ const paginateHearings = async (where, query, currentUser) => {
 
 const getHearings = async (caseId, query, currentUser) => {
   await caseService.getCaseById(caseId, currentUser);
-  return paginateHearings(buildHearingWhere(query, { caseId }), query, currentUser);
+  return paginateHearings(
+    buildHearingWhere(query, { caseId }),
+    query,
+    currentUser,
+    { listShape: true },
+  );
 };
 
 const listHearingsHub = async (query, currentUser) => {
-  const roleName = currentUser.role?.name;
-  const caseScope = {};
-  if (!["SUPER_ADMIN", "ADMIN_LEADERSHIP"].includes(roleName)) {
-    caseScope.case = {
-      participants: {
-        some: {
-          userId: currentUser.id,
-          role: roleName,
-          accessStatus: "ACTIVE",
-        },
-      },
-    };
-  }
-  return paginateHearings(buildHearingWhere(query, caseScope), query, currentUser);
+  const caseScope = accessibleCaseRelationWhere(currentUser);
+  return paginateHearings(
+    buildHearingWhere(query, caseScope),
+    query,
+    currentUser,
+    { listShape: true },
+  );
 };
 
 const getHearing = async (caseId, hearingId, currentUser) => {
@@ -600,9 +823,27 @@ const getHearing = async (caseId, hearingId, currentUser) => {
     caseId,
     hearingId,
   );
+  const sanitized = sanitizeHearing(hearing, currentUser);
   return {
-    ...sanitizeHearing(hearing, currentUser),
+    ...sanitized,
     activity,
+    timeline: activity,
+  };
+};
+
+const getHearingById = async (hearingId, currentUser) => {
+  const hearing = await hearingRepository.findHearingById(hearingId);
+  if (!hearing) throw new ApiError(404, "Hearing not found.");
+  await caseService.getCaseById(hearing.caseId, currentUser);
+  const activity = await hearingRepository.findHearingTimeline(
+    hearing.caseId,
+    hearingId,
+  );
+  const sanitized = sanitizeHearing(hearing, currentUser);
+  return {
+    ...sanitized,
+    activity,
+    timeline: activity,
   };
 };
 
@@ -617,9 +858,43 @@ const updateHearing = async (caseId, hearingId, data, currentUser) => {
     ...(data.instructions !== undefined && {
       instructions: data.instructions || null,
     }),
+    ...(data.outcomeNotes !== undefined && {
+      outcomeNotes: data.outcomeNotes || null,
+    }),
     ...(data.timezone !== undefined && { timezone: data.timezone }),
   });
   return sanitizeHearing(updated, currentUser);
+};
+
+const updateAttendance = async (caseId, hearingId, data, currentUser) => {
+  await getAuthorizedHearing(caseId, hearingId, currentUser);
+  const attendees = data.attendees || [];
+  if (!attendees.length) {
+    throw new ApiError(400, "At least one attendee attendance update is required.");
+  }
+
+  await runTransaction(async (tx) => {
+    for (const row of attendees) {
+      try {
+        await hearingRepository.updateAttendeeAttendance(
+          hearingId,
+          row.caseParticipantId,
+          row.attendanceStatus,
+          tx,
+        );
+      } catch (error) {
+        if (error?.code === "P2025") {
+          throw new ApiError(
+            404,
+            `Attendee ${row.caseParticipantId} not found on this hearing.`,
+          );
+        }
+        throw error;
+      }
+    }
+  });
+
+  return getHearing(caseId, hearingId, currentUser);
 };
 
 const rescheduleHearing = async (caseId, hearingId, data, currentUser) => {
@@ -974,7 +1249,9 @@ module.exports = {
   getHearings,
   listHearingsHub,
   getHearing,
+  getHearingById,
   updateHearing,
+  updateAttendance,
   rescheduleHearing,
   cancelHearing,
   retryZoom,

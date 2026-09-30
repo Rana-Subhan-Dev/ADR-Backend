@@ -47,7 +47,12 @@ const auth = asyncHandler(async (req, res, next) => {
       lastName: true,
       email: true,
       phone: true,
+      jobTitle: true,
+      company: true,
+      bookList: true,
+      profileImageUrl: true,
       status: true,
+      lastLoginAt: true,
       roleId: true,
       role: {
         select: {

@@ -69,6 +69,15 @@ const resetPasswordSchema = Joi.object({
   password: passwordSchema,
 });
 
+const changePasswordSchema = Joi.object({
+  currentPassword: Joi.string().required(),
+  newPassword: passwordSchema,
+  confirmPassword: Joi.string()
+    .valid(Joi.ref("newPassword"))
+    .optional()
+    .messages({ "any.only": "Passwords do not match." }),
+});
+
 const resendInviteParamsSchema = Joi.object({
   userId: Joi.string().uuid().required(),
 });
@@ -79,5 +88,6 @@ module.exports = {
   signInSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  changePasswordSchema,
   resendInviteParamsSchema,
 };

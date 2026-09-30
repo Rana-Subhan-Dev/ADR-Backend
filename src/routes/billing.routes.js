@@ -141,6 +141,21 @@ router.get(
   controller.getPaymentTracking,
 );
 
+router.get(
+  "/payment-tracking",
+  requirePermission(PermissionModule.BILLING, PermissionAction.VIEW),
+  validate(validation.listPaymentsSchema, "query"),
+  controller.getPaymentTracking,
+);
+
+router.patch(
+  "/invoices/:invoiceId/payment-status",
+  requirePermission(PermissionModule.BILLING, PermissionAction.EDIT),
+  validate(validation.invoiceIdParamSchema, "params"),
+  validate(validation.updateInvoicePaymentStatusSchema),
+  controller.updateInvoicePaymentStatus,
+);
+
 router.post(
   "/invoices/:invoiceId/payments",
   requirePermission(PermissionModule.BILLING, PermissionAction.CREATE),

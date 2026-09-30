@@ -6,6 +6,7 @@ const {
   ZoomStatus,
   CalendarSyncStatus,
   ConflictStatus,
+  AttendanceStatus,
 } = require("@prisma/client");
 
 const timeRange = (schema) =>
@@ -20,6 +21,9 @@ const timeRange = (schema) =>
 const caseIdSchema = Joi.object({ caseId: Joi.string().uuid().required() });
 const hearingIdSchema = Joi.object({
   caseId: Joi.string().uuid().required(),
+  hearingId: Joi.string().uuid().required(),
+});
+const hubHearingIdSchema = Joi.object({
   hearingId: Joi.string().uuid().required(),
 });
 const participantId = Joi.string().uuid();
@@ -38,9 +42,7 @@ const conflictOverrideFields = {
 
 const scheduleHearingSchema = timeRange(
   Joi.object({
-    type: Joi.string()
-      .valid(...Object.values(HearingType))
-      .required(),
+    type: Joi.string().trim().required(),
     title: Joi.string().trim().min(2).max(255).required(),
     format: Joi.string()
       .valid(...Object.values(HearingFormat))
@@ -67,8 +69,23 @@ const updateHearingSchema = Joi.object({
     .optional(),
   location: Joi.string().trim().max(500).allow("", null).optional(),
   instructions: Joi.string().trim().max(5000).allow("", null).optional(),
+  outcomeNotes: Joi.string().trim().max(10000).allow("", null).optional(),
   timezone: Joi.string().trim().max(100).optional(),
 }).min(1);
+
+const updateAttendanceSchema = Joi.object({
+  attendees: Joi.array()
+    .items(
+      Joi.object({
+        caseParticipantId: participantId.required(),
+        attendanceStatus: Joi.string()
+          .valid(...Object.values(AttendanceStatus))
+          .required(),
+      }),
+    )
+    .min(1)
+    .required(),
+});
 
 const rescheduleHearingSchema = timeRange(
   Joi.object({
@@ -99,21 +116,15 @@ const hearingFilterFields = {
   hearingStatus: Joi.string()
     .valid(...Object.values(HearingStatus))
     .optional(),
-  type: Joi.string()
-    .valid(...Object.values(HearingType))
-    .optional(),
+  type: Joi.string().trim().optional(),
   format: Joi.string()
     .valid(...Object.values(HearingFormat))
     .optional(),
-  zoomStatus: Joi.string()
-    .valid(...Object.values(ZoomStatus))
-    .optional(),
-  calendarSyncStatus: Joi.string()
-    .valid(...Object.values(CalendarSyncStatus))
-    .optional(),
-  conflictStatus: Joi.string()
-    .valid(...Object.values(ConflictStatus))
-    .optional(),
+  zoomStatus: Joi.string().trim().optional(),
+  calendarSyncStatus: Joi.string().trim().optional(),
+  conflictStatus: Joi.string().trim().optional(),
+  datePreset: Joi.string().valid("today", "week", "month").optional(),
+  range: Joi.string().valid("today", "week", "month").optional(),
   caseId: Joi.string().uuid().optional(),
   caseType: Joi.string().optional(),
   neutralParticipantId: Joi.string().uuid().optional(),
@@ -122,6 +133,8 @@ const hearingFilterFields = {
   to: Joi.date().iso().optional(),
   dateFrom: Joi.date().iso().optional(),
   dateTo: Joi.date().iso().optional(),
+  hearingDateFrom: Joi.date().iso().optional(),
+  hearingDateTo: Joi.date().iso().optional(),
 };
 
 const getHearingsSchema = Joi.object(hearingFilterFields);
@@ -175,8 +188,10 @@ const manualZoomLinkSchema = Joi.object({
 module.exports = {
   caseIdSchema,
   hearingIdSchema,
+  hubHearingIdSchema,
   scheduleHearingSchema,
   updateHearingSchema,
+  updateAttendanceSchema,
   rescheduleHearingSchema,
   cancelHearingSchema,
   getHearingsSchema,

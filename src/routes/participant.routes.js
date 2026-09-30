@@ -74,6 +74,13 @@ router.get(
   participantController.getParticipant,
 );
 
+router.get(
+  "/:participantId/invitations",
+  requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
+  validate(participantIdSchema, "params"),
+  participantController.getParticipantInvitations,
+);
+
 router.patch(
   "/:participantId",
   requirePermission(PermissionModule.CASES, PermissionAction.EDIT),

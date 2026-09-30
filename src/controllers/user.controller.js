@@ -1,6 +1,37 @@
 const userService = require("../services/user.service");
 const ApiResponse = require("../utils/apiResponse");
 const asyncHandler = require("../utils/asyncHandler");
+const { sanitizeUser } = require("../utils/auth");
+
+/** Current session profile for Case Manager shell / profile screens (P11). */
+const getCurrentUser = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        sanitizeUser(req.user),
+        "Current user fetched successfully.",
+      ),
+    ),
+);
+
+const updateCurrentUser = asyncHandler(async (req, res) => {
+  const result = await userService.updateCurrentUserProfile(
+    req.user.id,
+    req.body,
+  );
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        sanitizeUser(result),
+        "Profile updated successfully.",
+      ),
+    );
+});
 
 const getUsers = asyncHandler(async (req, res) => {
   const result = await userService.getUsers(req.query);
@@ -41,6 +72,8 @@ const updateUserStatus = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
+  getCurrentUser,
+  updateCurrentUser,
   getUsers,
   getUserById,
   updateUser,

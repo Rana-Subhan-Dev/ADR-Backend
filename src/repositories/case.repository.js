@@ -5,29 +5,135 @@ const CASE_SELECT = {
   caseNumber: true,
   inquiryId: true,
   title: true,
+  summary: true,
   caseType: true,
+  caseTypeLabel: true,
   disputeCategoryId: true,
   disputeCategory: {
     select: { id: true, name: true },
   },
+  disputePartyStructure: true,
   lifecycleStatus: true,
+  isDraft: true,
+  stageId: true,
+  stage: {
+    select: { id: true, name: true, sortOrder: true },
+  },
+  caseValue: true,
+  feeScheduleStatus: true,
+  conflictCheckStatus: true,
+  isInternational: true,
+  lastContactDate: true,
+  followUpDate: true,
+  nextStep: true,
+  jurisdiction: true,
+  referralSource: true,
+  primaryCommunicationMethod: true,
+  notifyOnHearingScheduled: true,
+  notifyOnDocumentUploaded: true,
+  notifyOnCaseUpdate: true,
+  notifyOnDocuSignSent: true,
   closedAt: true,
   closureSummary: true,
   reopenReason: true,
-  jurisdiction: true,
-  isInternational: true,
-  caseValue: true,
   createdAt: true,
   updatedAt: true,
 
+  inquiry: {
+    select: {
+      id: true,
+      inquiryDate: true,
+      matterName: true,
+      status: true,
+      contactCellPhone: true,
+      clientReference: true,
+      caseTypeLabel: true,
+    },
+  },
+
+  revenueMilestones: {
+    orderBy: { sequence: "asc" },
+    take: 2,
+    select: {
+      id: true,
+      sequence: true,
+      estimatedAmount: true,
+      revenueDate: true,
+      status: true,
+    },
+  },
+
+  hearings: {
+    where: {
+      hearingStatus: { notIn: ["CANCELLED"] },
+      hearingDate: { not: null },
+    },
+    orderBy: { hearingDate: "asc" },
+    take: 5,
+    select: {
+      id: true,
+      hearingDate: true,
+      hearingStatus: true,
+      title: true,
+    },
+  },
+
   participants: {
-    where: { role: "CASE_MANAGER", isPrimary: true },
-    take: 1,
+    where: {
+      OR: [
+        { role: "CASE_MANAGER", isPrimary: true },
+        { role: "NEUTRAL", accessStatus: "ACTIVE" },
+      ],
+    },
     select: {
       userId: true,
+      role: true,
+      isPrimary: true,
       user: {
         select: { id: true, firstName: true, lastName: true, email: true },
       },
+    },
+  },
+
+  parties: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      organizationName: true,
+      side: true,
+      partyType: true,
+      representations: {
+        select: {
+          attorney: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+            },
+          },
+        },
+      },
+    },
+  },
+
+  invoices: {
+    orderBy: { createdAt: "desc" },
+    take: 5,
+    select: {
+      id: true,
+      invoiceStatus: true,
+      paymentStatus: true,
+      invoiceNumber: true,
+    },
+  },
+
+  billingConfiguration: {
+    select: {
+      id: true,
+      billingMode: true,
+      billingType: true,
     },
   },
 };

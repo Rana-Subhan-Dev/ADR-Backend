@@ -21,6 +21,7 @@ const {
   updateCaseStatusSchema,
   closeCaseSchema,
   reopenCaseSchema,
+  messageAllPartiesSchema,
 } = require("../validations/case.validation");
 
 const router = express.Router();
@@ -82,6 +83,19 @@ router.post(
   validate(caseIdSchema, "params"),
   validate(reopenCaseSchema),
   caseController.reopenCase,
+);
+
+router.post(
+  "/:id/messages",
+  requirePermission(PermissionModule.CASES, PermissionAction.EDIT),
+  requireInternalRole(
+    RoleName.SUPER_ADMIN,
+    RoleName.ADMIN_LEADERSHIP,
+    RoleName.CASE_MANAGER,
+  ),
+  validate(caseIdSchema, "params"),
+  validate(messageAllPartiesSchema),
+  caseController.messageAllParties,
 );
 
 router.get(

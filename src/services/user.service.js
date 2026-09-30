@@ -87,6 +87,38 @@ const updateUser = async (id, data) => {
   return userRepository.updateUser(id, data);
 };
 
+const updateCurrentUserProfile = async (userId, data) => {
+  const existingUser = await userRepository.findUserById(userId);
+  if (!existingUser) {
+    throw new ApiError(404, "User not found.");
+  }
+
+  const allowed = {};
+  for (const key of [
+    "firstName",
+    "lastName",
+    "phone",
+    "jobTitle",
+    "company",
+    "bookList",
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(data, key)) {
+      allowed[key] =
+        key === "phone" || key === "jobTitle" || key === "company"
+          ? data[key] === ""
+            ? null
+            : data[key]
+          : data[key];
+    }
+  }
+
+  if (Object.keys(allowed).length === 0) {
+    throw new ApiError(400, "No profile fields provided.");
+  }
+
+  return userRepository.updateUser(userId, allowed);
+};
+
 const updateUserStatus = async ({
   userId,
   status,
@@ -157,5 +189,6 @@ module.exports = {
   getUsers,
   getUserById,
   updateUser,
+  updateCurrentUserProfile,
   updateUserStatus,
 };

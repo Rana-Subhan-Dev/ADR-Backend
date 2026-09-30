@@ -12,6 +12,7 @@ const {
   signInSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  changePasswordSchema,
   resendInviteParamsSchema,
 } = require("../validations/auth.validation");
 
@@ -52,5 +53,14 @@ router.post(
   validate(resetPasswordSchema),
   authController.resetPassword,
 );
+
+router.post(
+  "/change-password",
+  auth,
+  validate(changePasswordSchema),
+  authController.changePassword,
+);
+
+router.post("/logout", auth, authController.logout);
 
 module.exports = router;

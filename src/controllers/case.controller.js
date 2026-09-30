@@ -64,7 +64,8 @@ const updateCaseStatus = asyncHandler(async (req, res) => {
   const result = await caseService.updateCaseStatus(
     req.params.id,
     req.body.lifecycleStatus,
-    req.user
+    req.user,
+    req.body.reason,
   );
 
   return res.status(200).json(
@@ -72,6 +73,22 @@ const updateCaseStatus = asyncHandler(async (req, res) => {
       200,
       result,
       "Case status updated successfully."
+    )
+  );
+});
+
+const messageAllParties = asyncHandler(async (req, res) => {
+  const result = await caseService.messageAllParties(
+    req.params.id,
+    req.body,
+    req.user,
+  );
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      result,
+      "Message sent successfully."
     )
   );
 });
@@ -132,4 +149,5 @@ module.exports = {
   getClosureChecklist,
   closeCase,
   reopenCase,
+  messageAllParties,
 };

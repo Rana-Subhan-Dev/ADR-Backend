@@ -18,12 +18,22 @@ const {
   getUsersSchema,
   userIdSchema,
   updateUserSchema,
+  updateMeSchema,
   updateUserStatusSchema,
 } = require("../validations/user.validation");
 
 const router = express.Router();
 
 router.use(auth);
+
+// Authenticated profile for the signed-in user (Case Manager P11).
+router.get("/me", userController.getCurrentUser);
+
+router.patch(
+  "/me",
+  validate(updateMeSchema),
+  userController.updateCurrentUser,
+);
 
 router.get(
   "/",

@@ -8,6 +8,8 @@ model User {
   lastName        String
   phone           String?
   jobTitle        String?
+  company         String?
+  bookList        Boolean @default(false)
   profileImageUrl String?
 
   userType UserType
@@ -53,11 +55,13 @@ model User {
   auditLogs                  AuditLog[]
   legalAcknowledgements      LegalAcknowledgement[]
   notifications              Notification[]
+  ownedContacts              Contact[]                   @relation("ContactOwner")
 
   // ----------------------------------------------------------
   // Case-management domain relations
   // ----------------------------------------------------------
   preliminaryInquiries       Inquiry[]                   @relation("InquiryPreliminaryCaseManager")
+  preliminaryInquiryNeutrals InquiryPreliminaryNeutral[] @relation("InquiryPreliminaryNeutral")
   caseParticipations         CaseParticipant[]
   attorneyProfile            Attorney?
   documentSubmissionRequests DocumentSubmissionRequest[]

@@ -61,8 +61,13 @@ const getParticipantsSchema = Joi.object({
     .optional(),
 });
 
+const listParticipantsHubSchema = getParticipantsSchema.keys({
+  caseId: Joi.string().uuid().optional(),
+});
+
 const revokeParticipantSchema = Joi.object({
   reason: Joi.string().trim().min(2).max(1000).required(),
+  details: Joi.string().trim().max(2000).allow("", null).optional(),
 });
 const updateAccessSchema = Joi.object({
   accessStatus: Joi.string()
@@ -83,6 +88,7 @@ module.exports = {
   inviteParticipantSchema,
   updateParticipantSchema,
   getParticipantsSchema,
+  listParticipantsHubSchema,
   revokeParticipantSchema,
   updateAccessSchema,
   assignNeutralSchema,

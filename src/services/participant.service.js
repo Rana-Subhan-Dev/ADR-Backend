@@ -1,8 +1,10 @@
 const crypto = require("crypto");
 const prisma = require("../config/prisma");
+const { CaseParticipantRole } = require("@prisma/client");
 const participantRepository = require("../repositories/participant.repository");
 const authRepository = require("../repositories/auth.repository");
 const caseService = require("./case.service");
+const { accessibleCaseWhere } = require("../utils/caseAccess");
 const ApiError = require("../utils/apiError");
 const { setupUrlForClient } = require("./auth.service");
 const { sendEmail } = require("../utils/sendEmail");
@@ -13,6 +15,7 @@ const {
   INVITATION_TOKEN_BYTES,
   INVITATION_EXPIRES_IN_DAYS,
 } = require("../constants/auth.constants");
+const notificationService = require("./notification.service");
 
 const hashToken = (token) =>
   crypto.createHash("sha256").update(token).digest("hex");
@@ -37,40 +40,56 @@ const assertAssociations = async (data, caseId) => {
   }
 };
 
+const formatPersonName = (user) => {
+  if (!user) return null;
+  const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+  return name || user.email || null;
+};
+
+const formatPartyName = (party) => {
+  if (!party) return null;
+  if (party.organizationName) return party.organizationName;
+  return (
+    [party.firstName, party.lastName].filter(Boolean).join(" ").trim() || null
+  );
+};
+
+const mapParticipantDto = (participant) => {
+  if (!participant) return participant;
+  return {
+    ...participant,
+    name: formatPersonName(participant.user),
+    phone: participant.user?.phone ?? null,
+    lastLogin: participant.user?.lastLoginAt ?? null,
+    lastInviteSent: participant.lastInviteSentAt ?? null,
+    firm: participant.attorney?.lawFirm?.name ?? null,
+    representedParty: formatPartyName(participant.caseParty),
+    caseNumber: participant.case?.caseNumber ?? null,
+    caseTitle: participant.case?.title ?? null,
+  };
+};
+
 const getParticipant = async (caseId, participantId, currentUser) => {
   await caseService.getCaseById(caseId, currentUser);
   const participant =
     await participantRepository.findParticipantById(participantId);
   if (!participant || participant.caseId !== caseId)
     throw new ApiError(404, "Participant not found.");
-  return participant;
+  return mapParticipantDto(participant);
 };
 
-const getParticipants = async (caseId, query, currentUser) => {
-  await caseService.getCaseById(caseId, currentUser);
+const paginateParticipants = async (where, query, hub = false) => {
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 10;
-  const where = { caseId };
-  if (query.role) where.role = query.role;
-  if (query.accessStatus) where.accessStatus = query.accessStatus;
-  if (query.invitationStatus) where.invitationStatus = query.invitationStatus;
-  if (query.search) {
-    where.user = {
-      OR: [
-        { firstName: { contains: query.search, mode: "insensitive" } },
-        { lastName: { contains: query.search, mode: "insensitive" } },
-        { email: { contains: query.search, mode: "insensitive" } },
-      ],
-    };
-  }
   const [participants, total] = await participantRepository.getParticipants({
     where,
     skip: (page - 1) * limit,
     take: limit,
+    hub,
   });
-  const totalPages = Math.ceil(total / limit);
+  const totalPages = Math.ceil(total / limit) || 1;
   return {
-    participants,
+    participants: participants.map(mapParticipantDto),
     pagination: {
       page,
       limit,
@@ -80,6 +99,71 @@ const getParticipants = async (caseId, query, currentUser) => {
       hasPreviousPage: page > 1,
     },
   };
+};
+
+const getParticipants = async (caseId, query, currentUser) => {
+  await caseService.getCaseById(caseId, currentUser);
+  const where = { caseId };
+  if (query.role) where.role = query.role;
+  if (query.accessStatus) where.accessStatus = query.accessStatus;
+  if (query.invitationStatus) where.invitationStatus = query.invitationStatus;
+  if (query.search) {
+    const term = { contains: query.search, mode: "insensitive" };
+    const roleGuess = query.search.toUpperCase().replace(/[\s-]+/g, "_");
+    const roleOr = Object.values(CaseParticipantRole).includes(roleGuess)
+      ? [{ role: roleGuess }]
+      : [];
+    where.OR = [
+      {
+        user: {
+          OR: [{ firstName: term }, { lastName: term }, { email: term }],
+        },
+      },
+      { attorney: { lawFirm: { name: term } } },
+      { caseParty: { organizationName: term } },
+      ...roleOr,
+    ];
+  }
+  return paginateParticipants(where, query, false);
+};
+
+const listParticipantsHub = async (query, currentUser) => {
+  const caseScope = accessibleCaseWhere(currentUser);
+  const caseFilter = Object.keys(caseScope).length ? { case: caseScope } : {};
+  const where = {
+    ...(query.role && { role: query.role }),
+    ...(query.accessStatus && { accessStatus: query.accessStatus }),
+    ...(query.invitationStatus && {
+      invitationStatus: query.invitationStatus,
+    }),
+    ...(query.caseId && { caseId: query.caseId }),
+  };
+  if (query.search) {
+    const term = { contains: query.search, mode: "insensitive" };
+    const roleGuess = query.search.toUpperCase().replace(/[\s-]+/g, "_");
+    const roleOr = Object.values(CaseParticipantRole).includes(roleGuess)
+      ? [{ role: roleGuess }]
+      : [];
+    where.AND = [
+      ...(Object.keys(caseFilter).length ? [caseFilter] : []),
+      {
+        OR: [
+          {
+            user: {
+              OR: [{ firstName: term }, { lastName: term }, { email: term }],
+            },
+          },
+          { case: { OR: [{ caseNumber: term }, { title: term }] } },
+          { attorney: { lawFirm: { name: term } } },
+          { caseParty: { organizationName: term } },
+          ...roleOr,
+        ],
+      },
+    ];
+  } else {
+    Object.assign(where, caseFilter);
+  }
+  return paginateParticipants(where, query, true);
 };
 
 const inviteParticipant = async (caseId, data, currentUser) => {
@@ -158,7 +242,7 @@ const inviteParticipant = async (caseId, data, currentUser) => {
           casePartyId: data.casePartyId || null,
           assignmentReason: data.assignmentReason || null,
           assignmentType: "ASSIGNED",
-          accessStatus: "ACTIVE",
+          accessStatus: "INACTIVE",
           invitationStatus: "INVITED",
           lastInviteSentAt: sentAt,
         },
@@ -187,16 +271,36 @@ const inviteParticipant = async (caseId, data, currentUser) => {
       actorUserId: currentUser.id,
     },
   });
+  await notificationService.notifyCaseManagers(caseId, {
+    eventType: "PARTICIPANT_INVITED",
+    subject: `Participant invited: ${email}`,
+    relatedRecordType: "Case",
+    relatedRecordId: caseId,
+    templateData: {
+      title: "Participant invited",
+      message: `${email} was invited as ${data.role}.`,
+      kind: "PARTICIPANT_INVITED",
+      href: `/case-manager/cases/${caseId}`,
+    },
+  });
   return {
-    ...participant,
+    ...mapParticipantDto(participant),
     ...(process.env.NODE_ENV === "development" && { invitationToken: token }),
   };
 };
 
 const resendInvitation = async (caseId, participantId, currentUser) => {
   const participant = await getParticipant(caseId, participantId, currentUser);
-  if (participant.invitationStatus !== "INVITED")
-    throw new ApiError(400, "Only pending invitations can be resent.");
+  const allowedStatuses = ["INVITED", "NOT_INVITED", "REVOKED", "EXPIRED"];
+  if (!allowedStatuses.includes(participant.invitationStatus)) {
+    throw new ApiError(
+      400,
+      "Invitation can only be sent when status is Not Invited, Invited, Expired, or Revoked.",
+    );
+  }
+  if (participant.user?.status === "ACTIVE" && participant.invitationStatus === "ACCEPTED") {
+    throw new ApiError(400, "Participant already accepted the invitation.");
+  }
   const token = crypto.randomBytes(INVITATION_TOKEN_BYTES).toString("hex");
   const sentAt = new Date();
   await prisma.$transaction(async (tx) => {
@@ -220,10 +324,17 @@ const resendInvitation = async (caseId, participantId, currentUser) => {
       {
         lastInviteSentAt: sentAt,
         invitationStatus: "INVITED",
-        accessStatus: "ACTIVE",
+        accessStatus: "INACTIVE",
+        revokeReason: null,
       },
       tx,
     );
+    if (participant.user.status !== "ACTIVE") {
+      await tx.user.update({
+        where: { id: participant.user.id },
+        data: { status: "INVITED" },
+      });
+    }
   });
   const setupUrl = setupUrlForClient(participant.role, token);
   await sendEmail(
@@ -239,15 +350,24 @@ const resendInvitation = async (caseId, participantId, currentUser) => {
   const updated =
     await participantRepository.findParticipantById(participantId);
   return {
-    ...updated,
+    ...mapParticipantDto(updated),
     ...(process.env.NODE_ENV === "development" && { invitationToken: token }),
   };
 };
 
-const revokeInvitation = async (caseId, participantId, reason, currentUser) => {
+const revokeInvitation = async (
+  caseId,
+  participantId,
+  reason,
+  currentUser,
+  details,
+) => {
   const participant = await getParticipant(caseId, participantId, currentUser);
-  if (participant.invitationStatus !== "INVITED")
+  if (!["INVITED", "NOT_INVITED"].includes(participant.invitationStatus))
     throw new ApiError(400, "Only pending invitations can be revoked.");
+  const revokeReason = details
+    ? `${reason}${reason ? ": " : ""}${details}`.trim()
+    : reason;
   await prisma.$transaction(async (tx) => {
     await participantRepository.revokePendingInvitations(
       participant.user.id,
@@ -258,12 +378,14 @@ const revokeInvitation = async (caseId, participantId, reason, currentUser) => {
       {
         invitationStatus: "REVOKED",
         accessStatus: "REVOKED",
-        revokeReason: reason,
+        revokeReason,
       },
       tx,
     );
   });
-  return participantRepository.findParticipantById(participantId);
+  return mapParticipantDto(
+    await participantRepository.findParticipantById(participantId),
+  );
 };
 
 const updateParticipant = async (caseId, participantId, data, currentUser) => {
@@ -292,7 +414,39 @@ const updateParticipant = async (caseId, participantId, data, currentUser) => {
         tx,
       );
   });
-  return participantRepository.findParticipantById(participantId);
+  return mapParticipantDto(
+    await participantRepository.findParticipantById(participantId),
+  );
+};
+
+const getParticipantInvitations = async (
+  caseId,
+  participantId,
+  currentUser,
+) => {
+  const participant = await getParticipant(caseId, participantId, currentUser);
+  const invitations = await participantRepository.findInvitationsByUserId(
+    participant.user.id,
+  );
+  return {
+    participantId: participant.id,
+    invitations: invitations.map((row) => ({
+      id: row.id,
+      status: row.status,
+      sentAt: row.lastSentAt,
+      createdAt: row.createdAt,
+      expiresAt: row.expiresAt,
+      revokedAt: row.revokedAt,
+      resendCount: row.resendCount,
+      invitedBy: row.invitedBy
+        ? {
+            id: row.invitedBy.id,
+            name: formatPersonName(row.invitedBy),
+            email: row.invitedBy.email,
+          }
+        : null,
+    })),
+  };
 };
 
 const updateAccess = async (
@@ -486,7 +640,9 @@ const assignNeutral = async (
 module.exports = {
   inviteParticipant,
   getParticipants,
+  listParticipantsHub,
   getParticipant,
+  getParticipantInvitations,
   resendInvitation,
   revokeInvitation,
   updateParticipant,

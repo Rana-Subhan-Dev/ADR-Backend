@@ -15,11 +15,13 @@ const {
 const {
   caseIdSchema,
   documentIdSchema,
+  documentVersionIdSchema,
   documentFileSchema,
   uploadVersionSchema,
   visibilitySchema,
   deleteSchema,
   listSchema,
+  getDocumentSchema,
   accessLogSchema,
 } = require("../validations/document.validation");
 
@@ -55,6 +57,7 @@ router.get(
   "/:documentId",
   requirePermission(PermissionModule.DOCUMENTS, PermissionAction.VIEW),
   validate(documentIdSchema, "params"),
+  validate(getDocumentSchema, "query"),
   documentController.getDocument,
 );
 router.post(
@@ -85,6 +88,12 @@ router.get(
   requirePermission(PermissionModule.DOCUMENTS, PermissionAction.VIEW),
   validate(documentIdSchema, "params"),
   documentController.getDocumentVersions,
+);
+router.get(
+  "/:documentId/versions/:versionId/download",
+  requirePermission(PermissionModule.DOCUMENTS, PermissionAction.VIEW),
+  validate(documentVersionIdSchema, "params"),
+  documentController.downloadDocumentVersion,
 );
 router.get(
   "/:documentId/download",

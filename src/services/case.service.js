@@ -2,6 +2,7 @@ const prisma = require("../config/prisma");
 
 const caseRepository = require("../repositories/case.repository");
 const ApiError = require("../utils/apiError");
+const notificationService = require("./notification.service");
 
 const {
   DEFAULT_PAGE,
@@ -14,16 +15,172 @@ const {
   CLOSABLE_STATUSES,
 } = require("../constants/case.constants");
 
+const formatMoney = (value) => {
+  if (value === null || value === undefined) return null;
+  return Number(value);
+};
+
+const partyDisplayName = (party) => {
+  if (!party) return null;
+  if (party.organizationName) return party.organizationName;
+  const name = [party.firstName, party.lastName].filter(Boolean).join(" ").trim();
+  return name || null;
+};
+
+const userDisplayName = (user) => {
+  if (!user) return null;
+  const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+  return name || user.email || null;
+};
+
+const mapLifecycleToCaseStatus = (lifecycleStatus, inquiry) => {
+  if (lifecycleStatus === "CLOSED") {
+    return { label: "Closed", tone: "closed" };
+  }
+  if (inquiry?.status === "INQUIRY" && lifecycleStatus === "INTAKE") {
+    return { label: "Inquiry", tone: "inquiry" };
+  }
+  if (lifecycleStatus === "ON_HOLD") {
+    return { label: "Case", tone: "onHold" };
+  }
+  if (["ACTIVE", "REOPENED", "SCHEDULED"].includes(lifecycleStatus)) {
+    return { label: "Case", tone: "case" };
+  }
+  return { label: "Case", tone: "default" };
+};
+
+const mapRevenueStatus = (status) => {
+  if (!status) return null;
+  if (status === "ESTIMATED") {
+    return { label: "Estimated", tone: "estimated", status };
+  }
+  if (status === "INVOICED" || status === "RECEIVED") {
+    return { label: "Total Submitted", tone: "submitted", status };
+  }
+  return { label: status, tone: "default", status };
+};
+
+const mapDepositStatus = (invoices, billingConfiguration) => {
+  const latest = invoices?.[0];
+  if (!latest) {
+    if (billingConfiguration?.billingMode === "DEPOSIT_BASED") {
+      return { label: "Create Invoice", tone: "action", status: "NONE" };
+    }
+    return null;
+  }
+  switch (latest.paymentStatus) {
+    case "PAID":
+      return { label: "Received", tone: "paid", status: "PAID" };
+    case "PARTIAL":
+      return { label: "Received Partial", tone: "partial", status: "PARTIAL" };
+    case "UNPAID":
+      return { label: "Payment Due", tone: "due", status: "UNPAID" };
+    default:
+      return {
+        label: latest.paymentStatus,
+        tone: "default",
+        status: latest.paymentStatus,
+      };
+  }
+};
+
+const pickNextHearingDate = (hearings = []) => {
+  const now = Date.now();
+  const withDates = hearings
+    .filter((h) => h.hearingDate)
+    .map((h) => ({ ...h, ts: new Date(h.hearingDate).getTime() }))
+    .sort((a, b) => a.ts - b.ts);
+
+  const upcoming = withDates.find((h) => h.ts >= now);
+  return (upcoming || withDates[withDates.length - 1] || null)?.hearingDate || null;
+};
+
 const mapCase = (caseRecord) => {
   if (!caseRecord) {
     return caseRecord;
   }
 
-  const { participants, ...rest } = caseRecord;
+  const {
+    participants = [],
+    parties = [],
+    hearings = [],
+    revenueMilestones = [],
+    invoices = [],
+    billingConfiguration,
+    inquiry,
+    stage,
+    nextStep,
+    ...rest
+  } = caseRecord;
+
+  const caseManagerParticipant = participants.find(
+    (p) => p.role === "CASE_MANAGER" && p.isPrimary,
+  );
+  const neutralParticipant = participants.find((p) => p.role === "NEUTRAL");
+
+  const milestone1 = revenueMilestones.find((m) => m.sequence === 1) || revenueMilestones[0];
+  const milestone2 = revenueMilestones.find((m) => m.sequence === 2) || revenueMilestones[1];
+
+  const partyNames = parties.map(partyDisplayName).filter(Boolean);
+  const attorneyNames = [
+    ...new Set(
+      parties.flatMap((p) =>
+        (p.representations || [])
+          .map((r) => userDisplayName(r.attorney))
+          .filter(Boolean),
+      ),
+    ),
+  ];
+
+  const caseStatus = mapLifecycleToCaseStatus(rest.lifecycleStatus, inquiry);
+  const hearingDate = pickNextHearingDate(hearings);
 
   return {
     ...rest,
-    caseManager: participants?.[0]?.user ?? null,
+    inquiry: inquiry || null,
+    stage: stage
+      ? {
+          id: stage.id,
+          name: stage.name,
+          label: stage.name,
+          sortOrder: stage.sortOrder,
+        }
+      : null,
+    nextStep: nextStep || null,
+    nextSteps: nextStep || null,
+    type: rest.caseType,
+    matterName: inquiry?.matterName || rest.title,
+    inquiryDate: inquiry?.inquiryDate || null,
+    caseStatus,
+    status: rest.lifecycleStatus,
+    hearingDate,
+    nextHearing: hearingDate
+      ? { hearingDate, id: hearings.find((h) => h.hearingDate === hearingDate)?.id }
+      : null,
+    estRevenue: formatMoney(milestone1?.estimatedAmount),
+    revenueDate: milestone1?.revenueDate || null,
+    revenueStatus: mapRevenueStatus(milestone1?.status),
+    estRevenue2: formatMoney(milestone2?.estimatedAmount),
+    revenue2Date: milestone2?.revenueDate || null,
+    depositStatus: mapDepositStatus(invoices, billingConfiguration),
+    revenueMilestones: revenueMilestones.map((m) => ({
+      ...m,
+      estimatedAmount: formatMoney(m.estimatedAmount),
+    })),
+    assignedNeutral: userDisplayName(neutralParticipant?.user),
+    assignedNeutralUser: neutralParticipant?.user || null,
+    parties: partyNames,
+    partyRecords: parties.map((p) => ({
+      id: p.id,
+      name: partyDisplayName(p),
+      side: p.side,
+      partyType: p.partyType,
+    })),
+    attorneys: attorneyNames,
+    caseManager: caseManagerParticipant?.user ?? null,
+    billingConfiguration: billingConfiguration || null,
+    openPathHint:
+      caseStatus.label === "Inquiry" ? "inquiry" : "case",
   };
 };
 
@@ -76,26 +233,126 @@ const assertActiveCaseManager = async (caseManagerId) => {
   }
 };
 
-const createCase = async (data, currentUser) => {
+const createCase = async (rawBody, currentUser) => {
+  const {
+    normalizeCaseCreatePayload,
+  } = require("../utils/cmPayloadNormalize");
+  const normalized = normalizeCaseCreatePayload(rawBody);
+
   const currentUserId =
     typeof currentUser === "string" ? currentUser : currentUser.id;
-  const { caseManagerId, ...caseData } = data;
 
-  await assertActiveCaseManager(caseManagerId);
+  const {
+    caseManagerId,
+    neutralUserId,
+    billingBootstrap,
+    title,
+    summary,
+    caseType,
+    caseTypeLabel,
+    disputeCategoryId,
+    disputePartyStructure,
+    jurisdiction,
+    referralSource,
+    isInternational,
+    isDraft,
+    lifecycleStatus,
+    primaryCommunicationMethod,
+    notifyOnHearingScheduled,
+    notifyOnDocumentUploaded,
+    notifyOnCaseUpdate,
+    notifyOnDocuSignSent,
+    lastContactDate,
+    followUpDate,
+    nextStep,
+  } = normalized;
+
+  if (!title) {
+    throw new ApiError(400, "title (caseTitle) is required.");
+  }
+
+  if (!isDraft) {
+    if (!caseType) throw new ApiError(400, "caseType is required.");
+    if (!caseManagerId) throw new ApiError(400, "caseManagerId is required.");
+    await assertActiveCaseManager(caseManagerId);
+  } else if (caseManagerId) {
+    await assertActiveCaseManager(caseManagerId);
+  }
+
+  const resolvedCaseType = caseType || "CUSTOM_ADR";
+  const resolvedManagerId = caseManagerId || currentUserId;
+
+  if (isDraft && !caseManagerId) {
+    // Draft without CM: use creating user if they are CM, else require id
+    try {
+      await assertActiveCaseManager(resolvedManagerId);
+    } catch {
+      throw new ApiError(400, "caseManagerId is required to save a draft case.");
+    }
+  }
 
   const createdCaseId = await prisma.$transaction(async (tx) => {
-    const caseNumber = await generateCaseNumber(caseData.caseType, tx);
+    const caseNumber = await generateCaseNumber(resolvedCaseType, tx);
 
     const newCase = await caseRepository.createCase(
       {
-        ...caseData,
+        title,
+        summary: summary || null,
+        caseType: resolvedCaseType,
+        caseTypeLabel: caseTypeLabel || null,
+        disputeCategoryId: disputeCategoryId || null,
+        disputePartyStructure: disputePartyStructure || null,
+        jurisdiction: jurisdiction || null,
+        referralSource: referralSource || null,
+        isInternational: Boolean(isInternational),
+        isDraft: Boolean(isDraft),
+        lifecycleStatus: lifecycleStatus || "INTAKE",
         caseNumber,
-        lifecycleStatus: "INTAKE",
+        primaryCommunicationMethod: primaryCommunicationMethod || null,
+        notifyOnHearingScheduled: Boolean(notifyOnHearingScheduled),
+        notifyOnDocumentUploaded: Boolean(notifyOnDocumentUploaded),
+        notifyOnCaseUpdate: Boolean(notifyOnCaseUpdate),
+        notifyOnDocuSignSent: Boolean(notifyOnDocuSignSent),
+        lastContactDate: lastContactDate ? new Date(lastContactDate) : null,
+        followUpDate: followUpDate ? new Date(followUpDate) : null,
+        nextStep: nextStep || null,
       },
       tx,
     );
 
-    await caseRepository.setPrimaryCaseManager(newCase.id, caseManagerId, tx);
+    await caseRepository.setPrimaryCaseManager(
+      newCase.id,
+      resolvedManagerId,
+      tx,
+    );
+
+    if (neutralUserId) {
+      await tx.caseParticipant.create({
+        data: {
+          caseId: newCase.id,
+          userId: neutralUserId,
+          role: "NEUTRAL",
+          isPrimary: true,
+          assignmentType: "ASSIGNED",
+          accessStatus: "ACTIVE",
+        },
+      });
+    }
+
+    if (billingBootstrap) {
+      await tx.billingConfiguration.create({
+        data: {
+          caseId: newCase.id,
+          billingType: billingBootstrap.billingType || "FLAT",
+          taxApplicability: Boolean(billingBootstrap.taxApplicability),
+          deliveryContactEmail: billingBootstrap.deliveryContactEmail || null,
+          billingNotes: billingBootstrap.billingNotes || null,
+          splitBillingEnabled:
+            String(billingBootstrap.payerResponsibility || "").toLowerCase() ===
+            "split",
+        },
+      });
+    }
 
     await tx.caseTimelineEvent.create({
       data: {
@@ -103,7 +360,9 @@ const createCase = async (data, currentUser) => {
         eventType: "CASE_CREATED",
         relatedRecordType: "Case",
         relatedRecordId: newCase.id,
-        summary: `Case ${caseNumber} created.`,
+        summary: isDraft
+          ? `Draft case ${caseNumber} saved.`
+          : `Case ${caseNumber} created.`,
         actorUserId: currentUserId,
       },
     });
@@ -111,8 +370,10 @@ const createCase = async (data, currentUser) => {
     return newCase.id;
   });
 
-  const readinessChecklistService = require("./readinessChecklist.service");
-  await readinessChecklistService.ensureReadinessChecklist(createdCaseId);
+  if (!isDraft) {
+    const readinessChecklistService = require("./readinessChecklist.service");
+    await readinessChecklistService.ensureReadinessChecklist(createdCaseId);
+  }
 
   return mapCase(await caseRepository.findCaseById(createdCaseId));
 };
@@ -159,35 +420,123 @@ const getCases = async (query, currentUser) => {
 
   const {
     search,
+    searchFields,
     caseType,
     disputeCategoryId,
     lifecycleStatus,
     caseManagerId,
+    followUpDate,
+    assignedNeutralId,
+    hearingDateFrom,
+    hearingDateTo,
+    caseStatus,
+    stageId,
+    stageName,
+    revenueStatus,
     sortBy = CASE_SORT_FIELDS.CREATED_AT,
     sortOrder = "desc",
   } = query;
 
   const where = {};
+  const and = [];
 
   if (!hasGlobalCaseAccess(currentUser.role?.name)) {
-    where.participants = {
-      some: {
-        userId: currentUser.id,
-        role: currentUser.role?.name,
-        accessStatus: "ACTIVE",
+    and.push({
+      participants: {
+        some: {
+          userId: currentUser.id,
+          role: currentUser.role?.name,
+          accessStatus: "ACTIVE",
+        },
       },
-    };
+    });
   } else if (caseManagerId) {
-    where.participants = {
-      some: { userId: caseManagerId, role: "CASE_MANAGER" },
-    };
+    and.push({
+      participants: {
+        some: { userId: caseManagerId, role: "CASE_MANAGER" },
+      },
+    });
   }
 
   if (search) {
-    where.OR = [
-      { caseNumber: { contains: search, mode: "insensitive" } },
-      { title: { contains: search, mode: "insensitive" } },
-    ];
+    const term = { contains: search, mode: "insensitive" };
+    const field = (searchFields || "all").toLowerCase();
+    if (field === "matter" || field === "matter_name") {
+      and.push({
+        OR: [{ title: term }, { inquiry: { matterName: term } }],
+      });
+    } else if (field === "case_number" || field === "casenumber") {
+      and.push({ caseNumber: term });
+    } else if (field === "party") {
+      and.push({
+        parties: {
+          some: {
+            OR: [
+              { firstName: term },
+              { lastName: term },
+              { organizationName: term },
+            ],
+          },
+        },
+      });
+    } else if (field === "attorney") {
+      and.push({
+        parties: {
+          some: {
+            representations: {
+              some: {
+                attorney: {
+                  OR: [{ firstName: term }, { lastName: term }],
+                },
+              },
+            },
+          },
+        },
+      });
+    } else {
+      and.push({
+        OR: [
+          { caseNumber: term },
+          { title: term },
+          { nextStep: term },
+          { inquiry: { matterName: term } },
+          {
+            parties: {
+              some: {
+                OR: [
+                  { firstName: term },
+                  { lastName: term },
+                  { organizationName: term },
+                ],
+              },
+            },
+          },
+          {
+            parties: {
+              some: {
+                representations: {
+                  some: {
+                    attorney: {
+                      OR: [{ firstName: term }, { lastName: term }],
+                    },
+                  },
+                },
+              },
+            },
+          },
+          {
+            participants: {
+              some: {
+                role: "NEUTRAL",
+                user: {
+                  OR: [{ firstName: term }, { lastName: term }],
+                },
+              },
+            },
+          },
+        ],
+      });
+    }
   }
 
   if (caseType) {
@@ -202,6 +551,93 @@ const getCases = async (query, currentUser) => {
     where.lifecycleStatus = lifecycleStatus;
   }
 
+  if (followUpDate) {
+    const dayStart = new Date(followUpDate);
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const dayEnd = new Date(followUpDate);
+    dayEnd.setUTCHours(23, 59, 59, 999);
+    where.followUpDate = { gte: dayStart, lte: dayEnd };
+  }
+
+  if (assignedNeutralId) {
+    and.push({
+      participants: {
+        some: {
+          userId: assignedNeutralId,
+          role: "NEUTRAL",
+          accessStatus: "ACTIVE",
+        },
+      },
+    });
+  }
+
+  if (hearingDateFrom || hearingDateTo) {
+    const hearingDateFilter = {};
+    if (hearingDateFrom) hearingDateFilter.gte = new Date(hearingDateFrom);
+    if (hearingDateTo) hearingDateFilter.lte = new Date(hearingDateTo);
+    and.push({
+      hearings: {
+        some: {
+          hearingStatus: { not: "CANCELLED" },
+          hearingDate: hearingDateFilter,
+        },
+      },
+    });
+  }
+
+  if (caseStatus) {
+    const normalized = String(caseStatus).toLowerCase();
+    if (normalized === "closed") {
+      where.lifecycleStatus = "CLOSED";
+    } else if (normalized === "inquiry") {
+      and.push({
+        lifecycleStatus: "INTAKE",
+        inquiry: { is: { status: "INQUIRY" } },
+      });
+    } else if (normalized === "case" || normalized === "post-hearing") {
+      and.push({
+        lifecycleStatus: { in: ["INTAKE", "SCHEDULED", "ACTIVE", "ON_HOLD", "REOPENED"] },
+      });
+      if (normalized === "case") {
+        and.push({
+          OR: [
+            { inquiry: null },
+            { inquiry: { is: { status: { not: "INQUIRY" } } } },
+            { lifecycleStatus: { not: "INTAKE" } },
+          ],
+        });
+      }
+    }
+  }
+
+  if (stageId) {
+    where.stageId = stageId;
+  } else if (stageName) {
+    where.stage = { name: { equals: stageName, mode: "insensitive" } };
+  }
+
+  if (revenueStatus) {
+    const statusMap = {
+      estimated: "ESTIMATED",
+      "total submitted": "INVOICED",
+      totalsubmitted: "INVOICED",
+      invoiced: "INVOICED",
+      received: "RECEIVED",
+    };
+    const mapped =
+      statusMap[String(revenueStatus).toLowerCase()] ||
+      String(revenueStatus).toUpperCase();
+    and.push({
+      revenueMilestones: {
+        some: { sequence: 1, status: mapped },
+      },
+    });
+  }
+
+  if (and.length) {
+    where.AND = and;
+  }
+
   const skip = (page - 1) * limit;
   const orderBy = { [sortBy]: sortOrder };
 
@@ -212,7 +648,7 @@ const getCases = async (query, currentUser) => {
     orderBy,
   });
 
-  const totalPages = Math.ceil(total / limit);
+  const totalPages = Math.ceil(total / limit) || 0;
 
   return {
     cases: cases.map(mapCase),
@@ -373,7 +809,7 @@ const closeCase = async (id, data, currentUser) => {
     );
   }
 
-  const closedAt = new Date(data.closeDate);
+  const closedAt = data.closeDate ? new Date(data.closeDate) : new Date();
 
   return prisma.$transaction(async (tx) => {
     const items = await syncDerivedClosureChecklist(id, tx);
@@ -487,7 +923,7 @@ const updateCase = async (id, data, currentUser) => {
   return mapCase(await caseRepository.findCaseById(id));
 };
 
-const updateCaseStatus = async (id, lifecycleStatus, currentUser) => {
+const updateCaseStatus = async (id, lifecycleStatus, currentUser, reason = null) => {
   const existingCase = mapCase(await caseRepository.findCaseById(id));
 
   if (!existingCase) {
@@ -495,16 +931,140 @@ const updateCaseStatus = async (id, lifecycleStatus, currentUser) => {
   }
 
   await assertCaseAccess(existingCase, currentUser);
-  assertCaseNotClosed(existingCase);
 
-  if (lifecycleStatus === "CLOSED" || lifecycleStatus === "REOPENED") {
-    throw new ApiError(
-      400,
-      "Use the dedicated close or reopen endpoints for this action.",
+  if (lifecycleStatus === "CLOSED") {
+    if (!reason || !String(reason).trim()) {
+      throw new ApiError(400, "reason is required when closing via status change.");
+    }
+    return closeCase(
+      id,
+      { closureSummary: String(reason).trim() },
+      currentUser,
     );
   }
 
-  return mapCase(await caseRepository.updateCase(id, { lifecycleStatus }));
+  if (lifecycleStatus === "REOPENED") {
+    if (!reason || !String(reason).trim()) {
+      throw new ApiError(400, "reason is required when reopening via status change.");
+    }
+    return reopenCase(
+      id,
+      { reopenReason: String(reason).trim() },
+      currentUser,
+    );
+  }
+
+  assertCaseNotClosed(existingCase);
+
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.case.update({
+      where: { id },
+      data: { lifecycleStatus, isDraft: false },
+      select: caseRepository.CASE_SELECT,
+    });
+
+    await writeCaseTimelineEvent(
+      tx,
+      id,
+      currentUser,
+      "STATUS_CHANGED",
+      reason
+        ? `Status changed to ${lifecycleStatus}: ${reason}`
+        : `Status changed to ${lifecycleStatus}.`,
+      { lifecycleStatus: existingCase.lifecycleStatus },
+      { lifecycleStatus, reason: reason || null },
+    );
+
+    await notificationService.notifyCaseManagers(
+      id,
+      {
+        eventType: "CASE_STATUS_CHANGED",
+        subject: `Case status changed to ${lifecycleStatus}`,
+        relatedRecordType: "Case",
+        relatedRecordId: id,
+        templateData: {
+          title: "Case status updated",
+          message: reason
+            ? `Status is now ${lifecycleStatus}: ${reason}`
+            : `Status is now ${lifecycleStatus}.`,
+          kind: "CASE_STATUS_CHANGED",
+          caseNumber: existingCase.caseNumber,
+          caseTitle: existingCase.title,
+          href: `/case-manager/cases/${id}`,
+        },
+      },
+      { excludeUserId: currentUser.id, tx },
+    );
+
+    return mapCase(updated);
+  });
+};
+
+const messageAllParties = async (caseId, payload, currentUser) => {
+  const { sendEmail } = require("../utils/sendEmail");
+  const existingCase = mapCase(await caseRepository.findCaseById(caseId));
+  if (!existingCase) throw new ApiError(404, "Case not found.");
+  await assertCaseAccess(existingCase, currentUser);
+
+  const { recipientParticipantIds, subject, body } = payload;
+  const participants = await prisma.caseParticipant.findMany({
+    where: {
+      caseId,
+      id: { in: recipientParticipantIds },
+      accessStatus: "ACTIVE",
+    },
+    select: {
+      id: true,
+      role: true,
+      user: { select: { id: true, email: true, firstName: true, lastName: true } },
+    },
+  });
+
+  if (!participants.length) {
+    throw new ApiError(400, "No valid recipients found for this case.");
+  }
+
+  const missing = recipientParticipantIds.filter(
+    (id) => !participants.some((p) => p.id === id),
+  );
+  if (missing.length) {
+    throw new ApiError(400, `Invalid participant ids for this case: ${missing.join(", ")}`);
+  }
+
+  const sent = [];
+  for (const participant of participants) {
+    const email = participant.user?.email;
+    if (!email) continue;
+    await sendEmail(subject, body, email, "TEXT");
+    sent.push({
+      participantId: participant.id,
+      email,
+      role: participant.role,
+    });
+  }
+
+  await prisma.caseTimelineEvent.create({
+    data: {
+      caseId,
+      eventType: "MESSAGE_SENT",
+      relatedRecordType: "Case",
+      relatedRecordId: caseId,
+      summary: `Message sent to ${sent.length} party(ies): ${subject}`,
+      actorUserId: currentUser.id,
+      newValue: JSON.stringify({
+        subject,
+        recipientParticipantIds,
+        sentCount: sent.length,
+      }),
+    },
+  });
+
+  return {
+    caseId,
+    subject,
+    sent,
+    sentCount: sent.length,
+  };
 };
 
 const buildCaseManagerScope = (currentUser) => {
@@ -536,6 +1096,7 @@ module.exports = {
   getClosureChecklist,
   closeCase,
   reopenCase,
+  messageAllParties,
   mapCase,
   generateCaseNumber,
   assertActiveCaseManager,

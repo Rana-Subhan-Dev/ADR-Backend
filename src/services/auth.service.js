@@ -403,6 +403,68 @@ const resetPassword = async ({ token, password }) => {
   };
 };
 
+const changePassword = async ({ userId, currentPassword, newPassword }) => {
+  const user = await authRepository.findUserById(userId);
+  if (!user) {
+    throw new ApiError(404, "User not found.");
+  }
+  if (!user.passwordHash) {
+    throw new ApiError(400, "Password change is not available for this account.");
+  }
+
+  const valid = await comparePassword(currentPassword, user.passwordHash);
+  if (!valid) {
+    throw new ApiError(400, "Current password is incorrect.");
+  }
+
+  if (currentPassword === newPassword) {
+    throw new ApiError(
+      400,
+      "New password must be different from the current password.",
+    );
+  }
+
+  const passwordHash = await hashPassword(newPassword);
+  await prisma.user.update({
+    where: { id: userId },
+    data: {
+      passwordHash,
+      lastPasswordChangeAt: new Date(),
+      mustChangePassword: false,
+    },
+  });
+
+  // Best-effort revoke of any tracked sessions (JWT auth may not persist sessions).
+  await prisma.session.updateMany({
+    where: { userId, revokedAt: null },
+    data: {
+      revokedAt: new Date(),
+      revokedReason: "PASSWORD_CHANGED",
+    },
+  });
+
+  return { message: "Password changed successfully." };
+};
+
+const logout = async ({ userId, accessToken }) => {
+  if (accessToken) {
+    const accessTokenHash = hashToken(accessToken);
+    await prisma.session.updateMany({
+      where: {
+        userId,
+        accessTokenHash,
+        revokedAt: null,
+      },
+      data: {
+        revokedAt: new Date(),
+        revokedReason: "LOGOUT",
+      },
+    });
+  }
+
+  return { message: "Logged out successfully." };
+};
+
 module.exports = {
   setupUrlForClient,
   inviteUser,
@@ -411,4 +473,6 @@ module.exports = {
   signIn,
   forgotPassword,
   resetPassword,
+  changePassword,
+  logout,
 };

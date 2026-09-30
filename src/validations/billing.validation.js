@@ -13,6 +13,21 @@ const {
   TimesheetActivityType,
   InvoiceAttachmentType,
 } = require("@prisma/client");
+const {
+  normalizeBillingTypeInput,
+  normalizeBillingModeInput,
+  normalizeBillingInputSourceInput,
+  normalizeExpensesPolicyInput,
+} = require("../utils/cmPayloadNormalize");
+
+const enumOrAlias = (normalizeFn, allowedValues) =>
+  Joi.string().custom((value, helpers) => {
+    const normalized = normalizeFn(value);
+    if (!allowedValues.includes(normalized)) {
+      return helpers.error("any.only");
+    }
+    return normalized;
+  });
 
 const caseIdParamSchema = Joi.object({
   caseId: Joi.string().uuid().required(),
@@ -46,22 +61,29 @@ const payerSplitSchema = Joi.object({
 const additionalTimekeeperSchema = Joi.object({
   role: Joi.string().trim().min(1).max(100).required(),
   hourlyRate: Joi.number().precision(2).min(0).max(99999999.99).required(),
-  expensesAllowed: Joi.string()
-    .valid(...Object.values(BillingExpensesPolicy))
+  expensesAllowed: enumOrAlias(
+    normalizeExpensesPolicyInput,
+    Object.values(BillingExpensesPolicy),
+  )
     .default(BillingExpensesPolicy.NOT_ALLOWED)
     .optional(),
 });
 
 const caseBillingConfigSchema = Joi.object({
-  billingType: Joi.string()
-    .valid(...Object.values(BillingType))
-    .required(),
-  billingInputSource: Joi.string()
-    .valid(...Object.values(BillingInputSource))
+  billingType: enumOrAlias(
+    normalizeBillingTypeInput,
+    Object.values(BillingType),
+  ).required(),
+  billingInputSource: enumOrAlias(
+    normalizeBillingInputSourceInput,
+    Object.values(BillingInputSource),
+  )
     .default(BillingInputSource.FIRM_INVOICE)
     .optional(),
-  billingMode: Joi.string()
-    .valid(...Object.values(BillingMode))
+  billingMode: enumOrAlias(
+    normalizeBillingModeInput,
+    Object.values(BillingMode),
+  )
     .default(BillingMode.DEPOSIT_BASED)
     .optional(),
   neutralHourlyRate: rateSchema.optional(),
@@ -79,8 +101,10 @@ const caseBillingConfigSchema = Joi.object({
   additionalDayRate: rateSchema.optional(),
   customRate: moneySchema.optional(),
   customRateDescription: Joi.string().trim().max(500).allow(null, "").optional(),
-  expensesPolicy: Joi.string()
-    .valid(...Object.values(BillingExpensesPolicy))
+  expensesPolicy: enumOrAlias(
+    normalizeExpensesPolicyInput,
+    Object.values(BillingExpensesPolicy),
+  )
     .allow(null)
     .optional(),
   travelTimeRateType: Joi.string()
@@ -147,15 +171,18 @@ const listBillingConfigurationsSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(100).default(20),
   search: Joi.string().trim().max(100).allow("").optional(),
-  billingType: Joi.string()
-    .valid(...Object.values(BillingType))
-    .optional(),
-  billingInputSource: Joi.string()
-    .valid(...Object.values(BillingInputSource))
-    .optional(),
-  billingMode: Joi.string()
-    .valid(...Object.values(BillingMode))
-    .optional(),
+  billingType: enumOrAlias(
+    normalizeBillingTypeInput,
+    Object.values(BillingType),
+  ).optional(),
+  billingInputSource: enumOrAlias(
+    normalizeBillingInputSourceInput,
+    Object.values(BillingInputSource),
+  ).optional(),
+  billingMode: enumOrAlias(
+    normalizeBillingModeInput,
+    Object.values(BillingMode),
+  ).optional(),
   status: Joi.string().valid("CONFIGURED", "INCOMPLETE").optional(),
   caseStatus: Joi.string().optional(),
   caseType: Joi.string().optional(),
@@ -175,6 +202,7 @@ const listApprovedTimesheetsSchema = Joi.object({
   search: Joi.string().trim().max(100).allow("").optional(),
   caseId: Joi.string().uuid().optional(),
   hearingId: Joi.string().uuid().optional(),
+  hearingOnly: Joi.boolean().optional(),
   neutralUserId: Joi.string().uuid().optional(),
   activityType: Joi.string()
     .valid(...Object.values(TimesheetActivityType))
@@ -335,12 +363,29 @@ const listPaymentsSchema = Joi.object({
   search: Joi.string().trim().max(100).allow("").optional(),
   caseId: Joi.string().uuid().optional(),
   invoiceId: Joi.string().uuid().optional(),
+  paymentStatus: Joi.string()
+    .valid(...Object.values(PaymentStatus))
+    .optional(),
+  invoiceStatus: Joi.string()
+    .valid(...Object.values(InvoiceStatus))
+    .optional(),
+  agingBucket: Joi.string()
+    .valid("current", "1-30", "31-60", "61-90", "90+")
+    .optional(),
+  overdueOnly: Joi.boolean().optional(),
   fromDate: Joi.date().iso().optional(),
   toDate: Joi.date().iso().optional(),
   sortBy: Joi.string()
-    .valid("paymentDate", "createdAt", "amount")
-    .default("paymentDate"),
+    .valid("paymentDate", "createdAt", "amount", "dueDate", "invoiceDate")
+    .default("dueDate"),
   sortOrder: Joi.string().valid("asc", "desc").default("desc"),
+});
+
+const updateInvoicePaymentStatusSchema = Joi.object({
+  paymentStatus: Joi.string()
+    .valid(...Object.values(PaymentStatus))
+    .required(),
+  notes: Joi.string().max(1000).allow(null, "").optional(),
 });
 
 const listQuickBooksSyncLogsSchema = Joi.object({
@@ -387,6 +432,7 @@ module.exports = {
   recordPaymentSchema,
   recordCreditNoteSchema,
   listPaymentsSchema,
+  updateInvoicePaymentStatusSchema,
   listQuickBooksSyncLogsSchema,
   retryQuickBooksSyncSchema,
   neutralPaymentStatementSchema,

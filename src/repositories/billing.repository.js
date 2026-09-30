@@ -200,7 +200,17 @@ const invoiceSelect = {
         },
       },
       billingConfiguration: {
-        select: billingConfigScalarSelect,
+        select: {
+          ...billingConfigScalarSelect,
+          payerSplits: {
+            select: {
+              casePartyId: true,
+              invoiceContactEmail: true,
+              invoiceContactName: true,
+              splitPercentage: true,
+            },
+          },
+        },
       },
     },
   },
@@ -257,6 +267,8 @@ const invoiceSelect = {
       amount: true,
       paymentDate: true,
       method: true,
+      referenceNumber: true,
+      notes: true,
       quickBooksPaymentId: true,
       createdAt: true,
     },
@@ -492,6 +504,11 @@ const getCasesWithOrWithoutBilling = async ({ where, skip, take, orderBy }) => {
         lifecycleStatus: true,
         createdAt: true,
         updatedAt: true,
+        inquiry: {
+          select: {
+            matterName: true,
+          },
+        },
         billingConfiguration: {
           select: {
             ...billingConfigScalarSelect,
@@ -594,11 +611,15 @@ const findApprovedTimesheets = async ({ where, skip, take, orderBy }) => {
                 neutralHourlyRate: true,
                 overageHourlyRate: true,
                 caseManagementHourlyRate: true,
+                includedPrePostHearingHours: true,
                 adminFeePercentage: true,
                 agreementFeePercentage: true,
                 splitBillingEnabled: true,
                 expensesPolicy: true,
               },
+            },
+            inquiry: {
+              select: { matterName: true },
             },
           },
         },
@@ -689,6 +710,8 @@ const createPayment = (data, tx = prisma) =>
       amount: true,
       paymentDate: true,
       method: true,
+      referenceNumber: true,
+      notes: true,
       quickBooksPaymentId: true,
       createdAt: true,
       invoice: {
@@ -726,6 +749,8 @@ const getPayments = async ({ where, skip, take, orderBy }) => {
         amount: true,
         paymentDate: true,
         method: true,
+        referenceNumber: true,
+        notes: true,
         quickBooksPaymentId: true,
         createdAt: true,
         invoice: {
@@ -736,6 +761,8 @@ const getPayments = async ({ where, skip, take, orderBy }) => {
             invoiceStatus: true,
             paymentStatus: true,
             amountDue: true,
+            dueDate: true,
+            quickBooksSyncStatus: true,
             case: {
               select: {
                 id: true,
@@ -749,6 +776,7 @@ const getPayments = async ({ where, skip, take, orderBy }) => {
                 firstName: true,
                 lastName: true,
                 organizationName: true,
+                email: true,
               },
             },
           },

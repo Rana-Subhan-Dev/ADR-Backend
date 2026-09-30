@@ -49,6 +49,28 @@ const updateUserSchema = Joi.object({
     .optional(),
 
   jobTitle: Joi.string().trim().max(100).allow(null, "").optional(),
+
+  company: Joi.string().trim().max(200).allow(null, "").optional(),
+
+  bookList: Joi.boolean().optional(),
+}).min(1);
+
+const updateMeSchema = Joi.object({
+  firstName: Joi.string().trim().min(2).max(100).optional(),
+
+  lastName: Joi.string().trim().min(2).max(100).optional(),
+
+  phone: Joi.string()
+    .trim()
+    .pattern(/^[0-9+\-\s()]+$/)
+    .allow(null, "")
+    .optional(),
+
+  jobTitle: Joi.string().trim().max(100).allow(null, "").optional(),
+
+  company: Joi.string().trim().max(200).allow(null, "").optional(),
+
+  bookList: Joi.boolean().optional(),
 }).min(1);
 
 const updateUserStatusSchema = Joi.object({
@@ -63,5 +85,6 @@ module.exports = {
   getUsersSchema,
   userIdSchema,
   updateUserSchema,
+  updateMeSchema,
   updateUserStatusSchema,
 };

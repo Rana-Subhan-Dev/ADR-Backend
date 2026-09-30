@@ -1,10 +1,20 @@
 const Joi = require("joi");
-const { DocumentVisibility, DocumentReviewStatus } = require("@prisma/client");
+const {
+  DocumentVisibility,
+  DocumentReviewStatus,
+  DocumentProcessingStatus,
+  DocumentAccessAction,
+} = require("@prisma/client");
 
 const caseIdSchema = Joi.object({ caseId: Joi.string().uuid().required() });
 const documentIdSchema = Joi.object({
   caseId: Joi.string().uuid().required(),
   documentId: Joi.string().uuid().required(),
+});
+const documentVersionIdSchema = Joi.object({
+  caseId: Joi.string().uuid().required(),
+  documentId: Joi.string().uuid().required(),
+  versionId: Joi.string().uuid().required(),
 });
 const documentFileSchema = Joi.object({
   name: Joi.string().trim().max(255).optional(),
@@ -53,20 +63,55 @@ const listSchema = Joi.object({
   reviewStatus: Joi.string()
     .valid(...Object.values(DocumentReviewStatus))
     .optional(),
+  processingStatus: Joi.string()
+    .valid(...Object.values(DocumentProcessingStatus))
+    .optional(),
   search: Joi.string().trim().max(255).optional(),
+  includeDeleted: Joi.boolean().optional(),
+});
+const getDocumentSchema = Joi.object({
+  includeDeleted: Joi.boolean().optional(),
 });
 const accessLogSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(100).default(20),
+  action: Joi.string()
+    .valid(...Object.values(DocumentAccessAction))
+    .optional(),
+  dateFrom: Joi.date().iso().optional(),
+  dateTo: Joi.date().iso().optional(),
+});
+
+const listDocumentsHubSchema = Joi.object({
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(100).default(20),
+  search: Joi.string().trim().max(255).optional(),
+  caseId: Joi.string().uuid().optional(),
+  categoryId: Joi.string().uuid().optional(),
+  category: Joi.string().trim().max(255).optional(),
+  visibility: Joi.string()
+    .valid(...Object.values(DocumentVisibility))
+    .optional(),
+  processingStatus: Joi.string()
+    .valid(...Object.values(DocumentProcessingStatus))
+    .optional(),
+  uploadedByUserId: Joi.string().uuid().optional(),
+  fileType: Joi.string().trim().max(100).optional(),
+  dateFrom: Joi.date().iso().optional(),
+  dateTo: Joi.date().iso().optional(),
+  includeDeleted: Joi.boolean().optional(),
 });
 
 module.exports = {
   caseIdSchema,
   documentIdSchema,
+  documentVersionIdSchema,
   documentFileSchema,
   uploadVersionSchema,
   visibilitySchema,
   deleteSchema,
   listSchema,
+  getDocumentSchema,
+  listDocumentsHubSchema,
   accessLogSchema,
 };

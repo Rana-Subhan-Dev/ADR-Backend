@@ -19,6 +19,7 @@ model Hearing {
 
   location         String?
   instructions     String? @db.Text
+  outcomeNotes     String? @db.Text
   timezone         String?
   durationMinutes  Int?
 

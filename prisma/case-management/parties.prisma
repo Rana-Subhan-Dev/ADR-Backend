@@ -89,15 +89,23 @@ model LawFirm {
 model Contact {
   id String @id @default(uuid())
 
-  name  String
-  email String?
-  phone String?
-  role  String?
-  notes String?
+  name      String
+  firstName String?
+  lastName  String?
+  company   String?
+  email     String?
+  phone     String?
+  role      String?
+  notes     String?
+
+  ownerUserId String?
+  owner       User?   @relation("ContactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now()) @db.Timestamp(3)
   updatedAt DateTime @updatedAt @db.Timestamp(3)
 
+  @@index([ownerUserId])
+  @@index([role])
   @@map("contacts")
 }
 

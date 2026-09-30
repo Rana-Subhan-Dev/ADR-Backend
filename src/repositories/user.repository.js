@@ -7,8 +7,12 @@ const USER_SELECT = {
   email: true,
   phone: true,
   jobTitle: true,
+  company: true,
+  bookList: true,
+  profileImageUrl: true,
   userType: true,
   status: true,
+  lastLoginAt: true,
   roleId: true,
   role: {
     select: {

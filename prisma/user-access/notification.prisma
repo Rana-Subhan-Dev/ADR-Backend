@@ -16,9 +16,11 @@ model Notification {
   deliveryStatus NotificationDeliveryStatus @default(PENDING)
   errorMessage   String?
   sentAt         DateTime?
+  readAt         DateTime?
 
   createdAt DateTime @default(now()) @db.Timestamp(3)
 
   @@index([recipientUserId, deliveryStatus])
+  @@index([recipientUserId, readAt])
   @@map("notifications")
 }

@@ -22,6 +22,17 @@ enum CaseType {
   CUSTOM_ADR
 }
 
+enum DisputePartyStructure {
+  SINGLE_PARTY
+  MULTI_PARTY
+}
+
+enum PrimaryCommunicationMethod {
+  EMAIL
+  PORTAL
+  EMAIL_AND_PORTAL
+}
+
 // Placeholder — value set not confirmed by either source; see doc §7.
 enum FeeScheduleStatus {
   NOT_SET
@@ -202,6 +213,7 @@ enum CaseTimelineEventType {
   CHECKLIST_ITEM_COMPLETED
   CASE_CLOSED
   CASE_REOPENED
+  MESSAGE_SENT
 }
 
 enum ChecklistCategory {
@@ -321,8 +333,11 @@ enum DocuSignEnvelopeStatus {
 
 enum DocuSignRecipientStatus {
   SENT
+  DELIVERED
+  SIGNED
   COMPLETED
   DECLINED
+  FAILED
 }
 
 enum IntegrationType {

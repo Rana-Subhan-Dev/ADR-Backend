@@ -22,6 +22,15 @@ const getParticipants = asyncHandler(async (req, res) => {
     .status(200)
     .json(new ApiResponse(200, result, "Participants fetched successfully."));
 });
+const listParticipantsHub = asyncHandler(async (req, res) => {
+  const result = await participantService.listParticipantsHub(
+    req.query,
+    req.user,
+  );
+  res
+    .status(200)
+    .json(new ApiResponse(200, result, "Participants hub fetched successfully."));
+});
 const getParticipant = asyncHandler(async (req, res) => {
   const result = await participantService.getParticipant(
     req.params.caseId,
@@ -31,6 +40,22 @@ const getParticipant = asyncHandler(async (req, res) => {
   res
     .status(200)
     .json(new ApiResponse(200, result, "Participant fetched successfully."));
+});
+const getParticipantInvitations = asyncHandler(async (req, res) => {
+  const result = await participantService.getParticipantInvitations(
+    req.params.caseId,
+    req.params.participantId,
+    req.user,
+  );
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        result,
+        "Participant invitation history fetched successfully.",
+      ),
+    );
 });
 const updateParticipant = asyncHandler(async (req, res) => {
   const result = await participantService.updateParticipant(
@@ -59,6 +84,7 @@ const revokeInvitation = asyncHandler(async (req, res) => {
     req.params.participantId,
     req.body.reason,
     req.user,
+    req.body.details,
   );
   res
     .status(200)
@@ -106,7 +132,9 @@ const assignNeutral = asyncHandler(async (req, res) => {
 module.exports = {
   inviteParticipant,
   getParticipants,
+  listParticipantsHub,
   getParticipant,
+  getParticipantInvitations,
   updateParticipant,
   resendInvitation,
   revokeInvitation,

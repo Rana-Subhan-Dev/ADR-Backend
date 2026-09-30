@@ -115,6 +115,17 @@ const getPaymentTracking = respond(
   (req) => billingService.getPaymentTracking(req.query, req.user),
 );
 
+const updateInvoicePaymentStatus = respond(
+  200,
+  "Invoice payment status updated successfully.",
+  (req) =>
+    billingService.updateInvoicePaymentStatus(
+      req.params.invoiceId,
+      req.body,
+      req.user,
+    ),
+);
+
 const syncInvoiceToQuickBooks = respond(
   200,
   "Invoice synced with QuickBooks successfully.",
@@ -176,6 +187,7 @@ module.exports = {
   recordPayment,
   recordCreditNote,
   getPaymentTracking,
+  updateInvoicePaymentStatus,
   syncInvoiceToQuickBooks,
   getQuickBooksSyncLogs,
   retryQuickBooksSync,

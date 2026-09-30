@@ -48,6 +48,13 @@ router.get(
 );
 
 router.get(
+  "/envelopes/by-external/:envelopeId",
+  requirePermission(PermissionModule.DOCUSIGN, PermissionAction.VIEW),
+  validate(validation.envelopeExternalIdSchema, "params"),
+  controller.getEnvelopeByExternalId,
+);
+
+router.get(
   "/envelopes/:envelopeRecordId",
   requirePermission(PermissionModule.DOCUSIGN, PermissionAction.VIEW),
   validate(validation.envelopeRecordIdSchema, "params"),
@@ -60,6 +67,14 @@ router.post(
   requireInternalRole(...manageRoles),
   validate(validation.envelopeRecordIdSchema, "params"),
   controller.remindEnvelope,
+);
+
+router.post(
+  "/envelopes/:envelopeRecordId/retry",
+  requirePermission(PermissionModule.DOCUSIGN, PermissionAction.CREATE),
+  requireInternalRole(...manageRoles),
+  validate(validation.envelopeRecordIdSchema, "params"),
+  controller.retryEnvelope,
 );
 
 router.get(

@@ -14,8 +14,10 @@ const { RoleName } = require("../constants/auth.constants");
 const {
   caseIdSchema,
   hearingIdSchema,
+  hubHearingIdSchema,
   scheduleHearingSchema,
   updateHearingSchema,
+  updateAttendanceSchema,
   rescheduleHearingSchema,
   cancelHearingSchema,
   getHearingsSchema,
@@ -42,6 +44,13 @@ hubRouter.get(
   requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
   validate(listHearingsHubSchema, "query"),
   hearingController.listHearingsHub,
+);
+
+hubRouter.get(
+  "/:hearingId",
+  requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
+  validate(hubHearingIdSchema, "params"),
+  hearingController.getHearingById,
 );
 
 router.get(
@@ -91,6 +100,15 @@ router.patch(
   validate(hearingIdSchema, "params"),
   validate(updateHearingSchema),
   hearingController.updateHearing,
+);
+
+router.patch(
+  "/:hearingId/attendance",
+  requirePermission(PermissionModule.CASES, PermissionAction.EDIT),
+  requireInternalRole(...mutatorRoles),
+  validate(hearingIdSchema, "params"),
+  validate(updateAttendanceSchema),
+  hearingController.updateAttendance,
 );
 
 router.post(

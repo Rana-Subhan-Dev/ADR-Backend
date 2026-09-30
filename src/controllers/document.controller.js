@@ -74,6 +74,18 @@ const getDocuments = asyncHandler(async (req, res) =>
     ),
 );
 
+const listDocumentsHub = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await documentService.listDocumentsHub(req.query, req.user),
+        "Documents hub fetched successfully.",
+      ),
+    ),
+);
+
 const getDocument = asyncHandler(async (req, res) =>
   res
     .status(200)
@@ -84,6 +96,7 @@ const getDocument = asyncHandler(async (req, res) =>
           req.params.caseId,
           req.params.documentId,
           req.user,
+          req.query,
         ),
         "Document fetched successfully.",
       ),
@@ -174,6 +187,23 @@ const downloadDocument = asyncHandler(async (req, res) =>
     ),
 );
 
+const downloadDocumentVersion = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await documentService.downloadDocument(
+          req.params.caseId,
+          req.params.documentId,
+          req.user,
+          req.params.versionId,
+        ),
+        "Document version download URL generated successfully.",
+      ),
+    ),
+);
+
 const getDocumentAccessLogs = asyncHandler(async (req, res) =>
   res
     .status(200)
@@ -195,11 +225,13 @@ module.exports = {
   createDocument,
   bulkUploadDocuments,
   getDocuments,
+  listDocumentsHub,
   getDocument,
   uploadNewVersion,
   updateVisibility,
   softDeleteDocument,
   getDocumentVersions,
   downloadDocument,
+  downloadDocumentVersion,
   getDocumentAccessLogs,
 };

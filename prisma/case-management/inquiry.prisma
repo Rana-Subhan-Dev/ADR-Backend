@@ -9,8 +9,11 @@ model Inquiry {
   counselFor         PartySide?
   contactEmail       String?
   contactPhone       String?
+  contactCellPhone   String?
+  clientReference    String?
 
   caseType          CaseType?
+  caseTypeLabel     String?
   disputeCategoryId String?
   disputeCategory   DisputeCategory? @relation(fields: [disputeCategoryId], references: [id], onDelete: SetNull)
 
@@ -28,6 +31,8 @@ model Inquiry {
   preliminaryCaseManagerId String?
   preliminaryCaseManager   User?   @relation("InquiryPreliminaryCaseManager", fields: [preliminaryCaseManagerId], references: [id], onDelete: SetNull)
 
+  preliminaryNeutrals InquiryPreliminaryNeutral[]
+
   // `Case.inquiryId` is the physical FK for this 1:1 relationship — this is
   // the virtual reverse side, populated once "Convert to Case" runs.
   convertedCase Case?
@@ -43,6 +48,22 @@ model Inquiry {
   @@index([preliminaryCaseManagerId])
   @@index([disputeCategoryId])
   @@map("inquiries")
+}
+
+model InquiryPreliminaryNeutral {
+  id String @id @default(uuid())
+
+  inquiryId String
+  inquiry   Inquiry @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation("InquiryPreliminaryNeutral", fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+
+  @@unique([inquiryId, userId])
+  @@index([userId])
+  @@map("inquiry_preliminary_neutrals")
 }
 
 model DisputeCategory {

@@ -57,6 +57,39 @@ const resetPassword = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, result, "Password has been reset successfully."));
 });
 
+const changePassword = asyncHandler(async (req, res) => {
+  const result = await authService.changePassword({
+    userId: req.user.id,
+    currentPassword: req.body.currentPassword,
+    newPassword: req.body.newPassword,
+  });
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, result, "Password changed successfully."));
+});
+
+const logout = asyncHandler(async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const accessToken =
+    req.cookies?.accessToken ||
+    (authHeader && authHeader.startsWith("Bearer ")
+      ? authHeader.substring(7)
+      : null);
+
+  const result = await authService.logout({
+    userId: req.user.id,
+    accessToken,
+  });
+
+  res.clearCookie?.("accessToken");
+  res.clearCookie?.("refreshToken");
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, result, "Logged out successfully."));
+});
+
 module.exports = {
   inviteUser,
   resendInvite,
@@ -64,4 +97,6 @@ module.exports = {
   signIn,
   forgotPassword,
   resetPassword,
+  changePassword,
+  logout,
 };
