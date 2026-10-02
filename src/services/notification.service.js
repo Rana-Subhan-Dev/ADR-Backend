@@ -148,6 +148,35 @@ const createInAppNotification = async (
   );
 };
 
+const createInAppNotifications = async (notifications, tx = null) => {
+  const sentAt = new Date();
+  const rows = (notifications || [])
+    .filter((notification) => notification.recipientUserId)
+    .map(
+      ({
+        recipientUserId,
+        eventType,
+        subject,
+        templateData,
+        relatedRecordType,
+        relatedRecordId,
+      }) => ({
+        recipientUserId,
+        channel: "IN_APP",
+        eventType,
+        subject: subject || null,
+        templateData: templateData || undefined,
+        relatedRecordType: relatedRecordType || null,
+        relatedRecordId: relatedRecordId || null,
+        deliveryStatus: "SENT",
+        sentAt,
+      }),
+    );
+
+  if (!rows.length) return { count: 0 };
+  return notificationRepository.createNotifications(rows, tx || undefined);
+};
+
 const notifyCaseManagers = async (
   caseId,
   payload,
@@ -178,6 +207,7 @@ module.exports = {
   markRead,
   markAllRead,
   createInAppNotification,
+  createInAppNotifications,
   notifyCaseManagers,
   mapNotification,
 };

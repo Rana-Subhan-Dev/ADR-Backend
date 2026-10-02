@@ -17,6 +17,9 @@ const DEFAULT_SLOT_MINUTES = 30;
 const OVERRIDE_ROLES = ["SUPER_ADMIN", "ADMIN_LEADERSHIP"];
 const INTERNAL_ROLES = ["SUPER_ADMIN", "ADMIN_LEADERSHIP", "CASE_MANAGER"];
 const EXTERNAL_ROLES = ["NEUTRAL", "LAWYER", "CLIENT"];
+const ALTERNATE_HOST_ROLES = ["ADMIN_LEADERSHIP", "CASE_MANAGER", "NEUTRAL"];
+const CASE_SCOPED_ALTERNATE_HOST_ROLES = ["CASE_MANAGER", "NEUTRAL"];
+const INTERNAL_ALTERNATE_HOST_ROLES = ["ADMIN_LEADERSHIP", "CASE_MANAGER"];
 
 const createReference = () => `HRG-${crypto.randomUUID().toUpperCase()}`;
 
@@ -498,10 +501,50 @@ const recordEvent = async (
   });
 };
 
-const resolveAlternateHostEmail = async (userId, tx = prisma) => {
+const resolveEligibleAlternateHostEmail = async (
+  caseId,
+  userId,
+  tx = prisma,
+) => {
   if (!userId) return null;
-  const user = await hearingRepository.findUserEmail(userId, tx);
-  return user?.email || null;
+  const user = await hearingRepository.findAlternateHostCandidate(
+    caseId,
+    userId,
+    tx,
+  );
+  if (!user) throw new ApiError(400, "Alternate host user not found.");
+  if (user.status !== "ACTIVE") {
+    throw new ApiError(400, "Alternate host must be an active user.");
+  }
+
+  const roleName = user.role?.name;
+  if (!ALTERNATE_HOST_ROLES.includes(roleName)) {
+    throw new ApiError(
+      400,
+      "Alternate host must be an Admin Leadership user, Case Manager, or Neutral.",
+    );
+  }
+  if (
+    INTERNAL_ALTERNATE_HOST_ROLES.includes(roleName) &&
+    user.userType !== "INTERNAL"
+  ) {
+    throw new ApiError(
+      400,
+      "Admin Leadership and Case Manager alternate hosts must be internal users.",
+    );
+  }
+  if (
+    CASE_SCOPED_ALTERNATE_HOST_ROLES.includes(roleName) &&
+    !user.caseParticipations.some(
+      (participant) => participant.role === roleName,
+    )
+  ) {
+    throw new ApiError(
+      400,
+      "Neutral and Case Manager alternate hosts must be active participants in this case.",
+    );
+  }
+  return user.email;
 };
 
 const applyZoomCreate = async (hearing, { timezone, alternateHostEmail }) => {
@@ -562,6 +605,19 @@ const scheduleHearing = async (caseId, data, currentUser) => {
     (data.autoCreateZoom !== false &&
       ["VIRTUAL", "HYBRID"].includes(data.format));
   const sendCalendarInvites = data.sendCalendarInvites === true;
+  if (
+    data.alternateHostUserId &&
+    !wantsZoomMeeting(data.format, autoCreateZoom)
+  ) {
+    throw new ApiError(
+      400,
+      "Alternate host requires Zoom creation for a virtual or hybrid hearing.",
+    );
+  }
+  const alternateHostEmail = await resolveEligibleAlternateHostEmail(
+    caseId,
+    data.alternateHostUserId,
+  );
 
   const hearing = await runTransaction(
     async (tx) => {
@@ -656,9 +712,6 @@ const scheduleHearing = async (caseId, data, currentUser) => {
   let updated = hearing;
 
   if (wantsZoomMeeting(hearing.format, hearing.autoCreateZoom)) {
-    const alternateHostEmail = await resolveAlternateHostEmail(
-      hearing.zoomAlternateHostUserId,
-    );
     const zoomFields = await applyZoomCreate(hearing, {
       timezone: hearing.timezone,
       alternateHostEmail,
@@ -910,6 +963,10 @@ const rescheduleHearing = async (caseId, hearingId, data, currentUser) => {
   const sendCalendarInvites =
     data.sendCalendarInvites === true ||
     (data.sendCalendarInvites !== false && hearing.sendCalendarInvites);
+  const alternateHostEmail = await resolveEligibleAlternateHostEmail(
+    caseId,
+    hearing.zoomAlternateHostUserId,
+  );
 
   const updated = await runTransaction(
     async (tx) => {
@@ -1015,9 +1072,6 @@ const rescheduleHearing = async (caseId, hearingId, data, currentUser) => {
       } catch {
         /* ignore */
       }
-      const alternateHostEmail = await resolveAlternateHostEmail(
-        updated.zoomAlternateHostUserId,
-      );
       const zoomFields = await applyZoomCreate(updated, {
         timezone: updated.timezone,
         alternateHostEmail,
@@ -1028,9 +1082,6 @@ const rescheduleHearing = async (caseId, hearingId, data, currentUser) => {
     wantsZoomMeeting(updated.format, updated.autoCreateZoom) &&
     !hearing.zoomMeetingId
   ) {
-    const alternateHostEmail = await resolveAlternateHostEmail(
-      updated.zoomAlternateHostUserId,
-    );
     const zoomFields = await applyZoomCreate(updated, {
       timezone: updated.timezone,
       alternateHostEmail,
@@ -1128,6 +1179,11 @@ const retryZoom = async (caseId, hearingId, currentUser) => {
   )
     throw new ApiError(400, "Zoom meeting already exists. Use manual link to replace.");
 
+  const alternateHostEmail = await resolveEligibleAlternateHostEmail(
+    caseId,
+    hearing.zoomAlternateHostUserId,
+  );
+
   if (hearing.zoomMeetingId) {
     try {
       await zoomClient.deleteMeeting(hearing.zoomMeetingId);
@@ -1142,9 +1198,6 @@ const retryZoom = async (caseId, hearingId, currentUser) => {
     autoCreateZoom: true,
   });
 
-  const alternateHostEmail = await resolveAlternateHostEmail(
-    hearing.zoomAlternateHostUserId,
-  );
   const zoomFields = await applyZoomCreate(
     { ...hearing, autoCreateZoom: true },
     { timezone: hearing.timezone, alternateHostEmail },

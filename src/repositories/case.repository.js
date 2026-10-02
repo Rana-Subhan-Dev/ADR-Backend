@@ -213,6 +213,27 @@ const findPrimaryCaseManagerParticipant = async (caseId) => {
   });
 };
 
+const findActiveCaseParticipantsByIds = (
+  caseId,
+  participantIds,
+  tx = prisma,
+) =>
+  tx.caseParticipant.findMany({
+    where: {
+      caseId,
+      id: { in: participantIds },
+      accessStatus: "ACTIVE",
+    },
+    select: {
+      id: true,
+      userId: true,
+      role: true,
+    },
+  });
+
+const createCaseTimelineEvent = (data, tx = prisma) =>
+  tx.caseTimelineEvent.create({ data });
+
 module.exports = {
   CASE_SELECT,
   createCase,
@@ -222,4 +243,6 @@ module.exports = {
   findCaseByNumber,
   setPrimaryCaseManager,
   findPrimaryCaseManagerParticipant,
+  findActiveCaseParticipantsByIds,
+  createCaseTimelineEvent,
 };

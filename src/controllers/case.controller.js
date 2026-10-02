@@ -88,7 +88,7 @@ const messageAllParties = asyncHandler(async (req, res) => {
     new ApiResponse(
       200,
       result,
-      "Message sent successfully."
+      "In-app message sent successfully."
     )
   );
 });

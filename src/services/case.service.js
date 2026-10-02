@@ -1,4 +1,5 @@
 const prisma = require("../config/prisma");
+const { runTransaction } = require("../config/prisma");
 
 const caseRepository = require("../repositories/case.repository");
 const ApiError = require("../utils/apiError");
@@ -1001,70 +1002,88 @@ const updateCaseStatus = async (id, lifecycleStatus, currentUser, reason = null)
 };
 
 const messageAllParties = async (caseId, payload, currentUser) => {
-  const { sendEmail } = require("../utils/sendEmail");
   const existingCase = mapCase(await caseRepository.findCaseById(caseId));
   if (!existingCase) throw new ApiError(404, "Case not found.");
   await assertCaseAccess(existingCase, currentUser);
 
-  const { recipientParticipantIds, subject, body } = payload;
-  const participants = await prisma.caseParticipant.findMany({
-    where: {
+  const { recipientParticipantIds, message } = payload;
+  const senderName = userDisplayName(currentUser);
+  const notificationSubject = `New message for case ${existingCase.caseNumber}`;
+
+  return runTransaction(async (tx) => {
+    const participants = await caseRepository.findActiveCaseParticipantsByIds(
       caseId,
-      id: { in: recipientParticipantIds },
-      accessStatus: "ACTIVE",
-    },
-    select: {
-      id: true,
-      role: true,
-      user: { select: { id: true, email: true, firstName: true, lastName: true } },
-    },
-  });
+      recipientParticipantIds,
+      tx,
+    );
 
-  if (!participants.length) {
-    throw new ApiError(400, "No valid recipients found for this case.");
-  }
+    if (!participants.length) {
+      throw new ApiError(400, "No valid recipients found for this case.");
+    }
 
-  const missing = recipientParticipantIds.filter(
-    (id) => !participants.some((p) => p.id === id),
-  );
-  if (missing.length) {
-    throw new ApiError(400, `Invalid participant ids for this case: ${missing.join(", ")}`);
-  }
+    const participantIds = new Set(participants.map((row) => row.id));
+    const missing = recipientParticipantIds.filter(
+      (participantId) => !participantIds.has(participantId),
+    );
+    if (missing.length) {
+      throw new ApiError(
+        400,
+        `Invalid participant ids for this case: ${missing.join(", ")}`,
+      );
+    }
 
-  const sent = [];
-  for (const participant of participants) {
-    const email = participant.user?.email;
-    if (!email) continue;
-    await sendEmail(subject, body, email, "TEXT");
-    sent.push({
-      participantId: participant.id,
-      email,
-      role: participant.role,
-    });
-  }
+    const recipientsByUserId = new Map();
+    for (const participant of participants) {
+      if (!recipientsByUserId.has(participant.userId)) {
+        recipientsByUserId.set(participant.userId, participant);
+      }
+    }
+    const recipients = [...recipientsByUserId.values()];
 
-  await prisma.caseTimelineEvent.create({
-    data: {
+    const notificationResult =
+      await notificationService.createInAppNotifications(
+        recipients.map((participant) => ({
+          recipientUserId: participant.userId,
+          eventType: "CASE_MESSAGE",
+          subject: notificationSubject,
+          relatedRecordType: "Case",
+          relatedRecordId: caseId,
+          templateData: {
+            title: notificationSubject,
+            message,
+            kind: "CASE_MESSAGE",
+            caseId,
+            caseNumber: existingCase.caseNumber,
+            caseTitle: existingCase.title,
+            senderUserId: currentUser.id,
+            senderName,
+            href: `/case-manager/cases/${caseId}`,
+          },
+        })),
+        tx,
+      );
+
+    await caseRepository.createCaseTimelineEvent(
+      {
+        caseId,
+        eventType: "MESSAGE_SENT",
+        relatedRecordType: "Case",
+        relatedRecordId: caseId,
+        summary: `In-app message sent to ${notificationResult.count} party(ies).`,
+        actorUserId: currentUser.id,
+        newValue: JSON.stringify({
+          recipientParticipantIds,
+          notifiedCount: notificationResult.count,
+        }),
+      },
+      tx,
+    );
+
+    return {
       caseId,
-      eventType: "MESSAGE_SENT",
-      relatedRecordType: "Case",
-      relatedRecordId: caseId,
-      summary: `Message sent to ${sent.length} party(ies): ${subject}`,
-      actorUserId: currentUser.id,
-      newValue: JSON.stringify({
-        subject,
-        recipientParticipantIds,
-        sentCount: sent.length,
-      }),
-    },
+      notifiedCount: notificationResult.count,
+    };
   });
-
-  return {
-    caseId,
-    subject,
-    sent,
-    sentCount: sent.length,
-  };
 };
 
 const buildCaseManagerScope = (currentUser) => {

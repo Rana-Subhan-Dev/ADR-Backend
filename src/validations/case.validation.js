@@ -157,9 +157,12 @@ const reopenCaseSchema = Joi.object({
 });
 
 const messageAllPartiesSchema = Joi.object({
-  recipientParticipantIds: Joi.array().items(Joi.string().uuid()).min(1).required(),
-  subject: Joi.string().trim().min(1).max(255).required(),
-  body: Joi.string().trim().min(1).max(10000).required(),
+  recipientParticipantIds: Joi.array()
+    .items(Joi.string().uuid())
+    .unique()
+    .min(1)
+    .required(),
+  message: Joi.string().trim().min(1).max(10000).required(),
 });
 
 module.exports = {

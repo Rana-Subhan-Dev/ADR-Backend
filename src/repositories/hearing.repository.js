@@ -131,10 +131,26 @@ const findCaseParticipants = (caseId, ids, tx = prisma) =>
     },
   });
 
-const findUserEmail = (userId, tx = prisma) =>
+const findAlternateHostCandidate = (caseId, userId, tx = prisma) =>
   tx.user.findUnique({
     where: { id: userId },
-    select: { id: true, email: true },
+    select: {
+      id: true,
+      email: true,
+      userType: true,
+      status: true,
+      role: { select: { name: true } },
+      caseParticipations: {
+        where: {
+          caseId,
+          accessStatus: "ACTIVE",
+        },
+        select: {
+          id: true,
+          role: true,
+        },
+      },
+    },
   });
 
 const findConflictingHearings = (
@@ -188,7 +204,7 @@ module.exports = {
   updateHearing,
   updateAttendeeAttendance,
   findCaseParticipants,
-  findUserEmail,
+  findAlternateHostCandidate,
   findConflictingHearings,
   findHearingTimeline,
 };

@@ -49,6 +49,9 @@ const markAllNotificationsRead = (recipientUserId, readAt = new Date()) =>
 const createNotification = (data, tx = prisma) =>
   tx.notification.create({ data, select: notificationSelect });
 
+const createNotifications = (data, tx = prisma) =>
+  tx.notification.createMany({ data });
+
 module.exports = {
   notificationSelect,
   getNotifications,
@@ -57,4 +60,5 @@ module.exports = {
   markNotificationRead,
   markAllNotificationsRead,
   createNotification,
+  createNotifications,
 };
