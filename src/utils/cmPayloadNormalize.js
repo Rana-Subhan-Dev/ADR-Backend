@@ -220,6 +220,19 @@ const BILLING_TYPE_ALIASES = {
   custom: "HYBRID",
 };
 
+const FEDARB_FEE_SCHEDULE_TYPE_ALIASES = {
+  arbitration: "ARBITRATION",
+  ARBITRATION: "ARBITRATION",
+  mediation: "MEDIATION",
+  MEDIATION: "MEDIATION",
+  expert: "CUSTOM_ADR",
+  EXPERT: "CUSTOM_ADR",
+  custom_adr: "CUSTOM_ADR",
+  CUSTOM_ADR: "CUSTOM_ADR",
+  hybrid_adr: "HYBRID_ADR",
+  HYBRID_ADR: "HYBRID_ADR",
+};
+
 const BILLING_MODE_ALIASES = {
   deposit_based: "DEPOSIT_BASED",
   DEPOSIT_BASED: "DEPOSIT_BASED",
@@ -280,6 +293,8 @@ const normalizeBillingInputSourceInput = (raw) =>
   aliasLookup(BILLING_INPUT_SOURCE_ALIASES, raw);
 const normalizeExpensesPolicyInput = (raw) =>
   aliasLookup(EXPENSES_POLICY_ALIASES, raw);
+const normalizeFedArbFeeScheduleTypeInput = (raw) =>
+  aliasLookup(FEDARB_FEE_SCHEDULE_TYPE_ALIASES, raw);
 
 const normalizeBillingConfigPayload = (body = {}) => {
   const next = { ...body };
@@ -296,6 +311,11 @@ const normalizeBillingConfigPayload = (body = {}) => {
   }
   if (body.expensesPolicy != null) {
     next.expensesPolicy = normalizeExpensesPolicyInput(body.expensesPolicy);
+  }
+  if (body.fedArbFeeScheduleType != null) {
+    next.fedArbFeeScheduleType = normalizeFedArbFeeScheduleTypeInput(
+      body.fedArbFeeScheduleType,
+    );
   }
   if (Array.isArray(body.additionalTimekeepers)) {
     next.additionalTimekeepers = body.additionalTimekeepers.map((row) => ({
@@ -317,6 +337,7 @@ module.exports = {
   normalizeBillingModeInput,
   normalizeBillingInputSourceInput,
   normalizeExpensesPolicyInput,
+  normalizeFedArbFeeScheduleTypeInput,
   normalizeBillingConfigPayload,
   emptyToNull,
 };

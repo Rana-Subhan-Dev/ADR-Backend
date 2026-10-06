@@ -21,6 +21,28 @@ const getCaseBillingConfig = respond(
   (req) => billingService.getCaseBillingConfig(req.params.caseId, req.user),
 );
 
+const createCaseBillingConfig = respond(
+  201,
+  "Case billing configuration created successfully.",
+  (req) =>
+    billingService.createCaseBillingConfig(
+      req.params.caseId,
+      req.body,
+      req.user,
+    ),
+);
+
+const updateCaseBillingConfig = respond(
+  200,
+  "Case billing configuration updated successfully.",
+  (req) =>
+    billingService.updateCaseBillingConfig(
+      req.params.caseId,
+      req.body,
+      req.user,
+    ),
+);
+
 const upsertCaseBillingConfig = respond(
   200,
   "Case billing configuration saved successfully.",
@@ -170,6 +192,8 @@ const downloadInvoicePdf = asyncHandler(async (req, res) => {
 module.exports = {
   getBillingConfigurationsList,
   getCaseBillingConfig,
+  createCaseBillingConfig,
+  updateCaseBillingConfig,
   upsertCaseBillingConfig,
   getApprovedTimesheets,
   generateDraftInvoice,

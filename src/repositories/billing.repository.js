@@ -103,6 +103,82 @@ const billingConfigSelect = {
   },
 };
 
+const billingCaseContextSelect = {
+  id: true,
+  caseNumber: true,
+  title: true,
+  caseType: true,
+  caseTypeLabel: true,
+  lifecycleStatus: true,
+  disputeCategory: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
+  inquiry: {
+    select: {
+      matterName: true,
+    },
+  },
+  parties: {
+    select: {
+      ...partyContactSelect,
+      representations: {
+        select: {
+          designation: true,
+          attorney: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+            },
+          },
+        },
+      },
+      caseParticipants: {
+        where: {
+          accessStatus: "ACTIVE",
+          role: { in: ["CLIENT", "LAWYER"] },
+        },
+        select: {
+          role: true,
+          user: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+            },
+          },
+        },
+      },
+    },
+    orderBy: [{ side: "asc" }, { createdAt: "asc" }],
+  },
+  participants: {
+    where: {
+      role: { in: ["CASE_MANAGER", "NEUTRAL"] },
+      accessStatus: "ACTIVE",
+    },
+    select: {
+      id: true,
+      role: true,
+      isPrimary: true,
+      user: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+        },
+      },
+    },
+    orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
+  },
+};
+
 const invoiceSelect = {
   id: true,
   caseId: true,
@@ -423,6 +499,32 @@ const findBillingConfigByCaseId = (caseId, tx = prisma) =>
     where: { caseId },
     select: billingConfigSelect,
   });
+
+const findBillingCaseContextById = (caseId, tx = prisma) =>
+  tx.case.findUnique({
+    where: { id: caseId },
+    select: billingCaseContextSelect,
+  });
+
+const findActiveBillingCaseParticipant = (caseId, userId, role, tx = prisma) =>
+  tx.caseParticipant.findFirst({
+    where: {
+      caseId,
+      userId,
+      role,
+      accessStatus: "ACTIVE",
+    },
+    select: { id: true },
+  });
+
+const findCasePartyIds = (caseId, partyIds, tx = prisma) =>
+  tx.caseParty.findMany({
+    where: { caseId, id: { in: partyIds } },
+    select: { id: true },
+  });
+
+const createBillingAuditLog = (data, tx = prisma) =>
+  tx.auditLog.create({ data });
 
 const upsertBillingConfig = async (
   caseId,
@@ -826,9 +928,14 @@ const findInvoiceBatchById = (id, tx = prisma) =>
 module.exports = {
   billingConfigSelect,
   billingConfigScalarSelect,
+  billingCaseContextSelect,
   invoiceSelect,
   invoiceBatchSelect,
   findBillingConfigByCaseId,
+  findBillingCaseContextById,
+  findActiveBillingCaseParticipant,
+  findCasePartyIds,
+  createBillingAuditLog,
   upsertBillingConfig,
   getBillingConfigurations,
   getCasesWithOrWithoutBilling,

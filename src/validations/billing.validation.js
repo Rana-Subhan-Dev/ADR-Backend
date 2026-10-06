@@ -18,6 +18,7 @@ const {
   normalizeBillingModeInput,
   normalizeBillingInputSourceInput,
   normalizeExpensesPolicyInput,
+  normalizeFedArbFeeScheduleTypeInput,
 } = require("../utils/cmPayloadNormalize");
 
 const enumOrAlias = (normalizeFn, allowedValues) =>
@@ -55,7 +56,7 @@ const payerSplitSchema = Joi.object({
   casePartyId: Joi.string().uuid().required(),
   invoiceContactEmail: Joi.string().email().allow(null, "").optional(),
   invoiceContactName: Joi.string().trim().max(200).allow(null, "").optional(),
-  splitPercentage: Joi.number().precision(2).min(0).max(100).required(),
+  splitPercentage: Joi.number().precision(2).min(0).max(100).optional(),
 });
 
 const additionalTimekeeperSchema = Joi.object({
@@ -123,8 +124,10 @@ const caseBillingConfigSchema = Joi.object({
   administrationFee: moneySchema.optional(),
   adminFeePercentage: percentSchema.optional(),
   agreementFeePercentage: percentSchema.optional(),
-  fedArbFeeScheduleType: Joi.string()
-    .valid(...Object.values(CaseType))
+  fedArbFeeScheduleType: enumOrAlias(
+    normalizeFedArbFeeScheduleTypeInput,
+    Object.values(CaseType),
+  )
     .allow(null)
     .optional(),
   taxApplicability: Joi.boolean().default(false).optional(),
@@ -165,7 +168,22 @@ const caseBillingConfigSchema = Joi.object({
       );
     }
     return value;
+  })
+  .rename("feeType", "billingType", {
+    ignoreUndefined: true,
+    override: false,
+  })
+  .rename("fedArbFeeType", "fedArbFeeScheduleType", {
+    ignoreUndefined: true,
+    override: false,
   });
+
+const createCaseBillingConfigSchema = caseBillingConfigSchema;
+
+const updateCaseBillingConfigSchema = caseBillingConfigSchema
+  .fork(["billingType"], (schema) => schema.optional())
+  .min(1)
+  .prefs({ noDefaults: true });
 
 const listBillingConfigurationsSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
@@ -419,6 +437,8 @@ module.exports = {
   invoiceIdParamSchema,
   invoiceBatchIdParamSchema,
   caseBillingConfigSchema,
+  createCaseBillingConfigSchema,
+  updateCaseBillingConfigSchema,
   listBillingConfigurationsSchema,
   listApprovedTimesheetsSchema,
   generateInvoiceSchema,

@@ -30,6 +30,22 @@ router.get(
   controller.getCaseBillingConfig,
 );
 
+router.post(
+  "/cases/:caseId/configuration",
+  requirePermission(PermissionModule.BILLING, PermissionAction.CREATE),
+  validate(validation.caseIdParamSchema, "params"),
+  validate(validation.createCaseBillingConfigSchema),
+  controller.createCaseBillingConfig,
+);
+
+router.patch(
+  "/cases/:caseId/configuration",
+  requirePermission(PermissionModule.BILLING, PermissionAction.EDIT),
+  validate(validation.caseIdParamSchema, "params"),
+  validate(validation.updateCaseBillingConfigSchema),
+  controller.updateCaseBillingConfig,
+);
+
 router.put(
   "/cases/:caseId/configuration",
   requirePermission(PermissionModule.BILLING, PermissionAction.EDIT),

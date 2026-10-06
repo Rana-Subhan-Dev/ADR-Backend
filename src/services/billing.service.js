@@ -12,8 +12,11 @@ const {
   IntegrationSyncStatus,
   IntegrationType,
   CaseTimelineEventType,
+  BillingType,
   BillingInputSource,
+  BillingMode,
   BillingExpensesPolicy,
+  TravelTimeRateType,
 } = require("@prisma/client");
 const {
   normalizeBillingConfigPayload,
@@ -98,15 +101,12 @@ const assertCanMutateCaseBilling = async (caseId, currentUser) => {
     if (!caseId) {
       throw new ApiError(400, "Case ID is required.");
     }
-    const participant = await prisma.caseParticipant.findFirst({
-      where: {
+    const participant =
+      await billingRepository.findActiveBillingCaseParticipant(
         caseId,
-        userId: currentUser.id,
-        role: "CASE_MANAGER",
-        accessStatus: "ACTIVE",
-      },
-      select: { id: true },
-    });
+        currentUser.id,
+        "CASE_MANAGER",
+      );
     if (!participant) {
       throw new ApiError(
         403,
@@ -210,6 +210,166 @@ const invoiceCreateSelect = {
   },
 };
 
+const BILLING_FORM_OPTIONS = Object.freeze({
+  feeTypes: [
+    { value: "HOURLY", label: "Hourly" },
+    { value: "DAILY", label: "Daily" },
+    { value: "FLAT", label: "Flat Rate" },
+    { value: "HYBRID", label: "Hybrid (Flat + Overage)" },
+    { value: "CUSTOM", label: "Custom" },
+  ],
+  billingInputSources: [
+    { value: BillingInputSource.FIRM_INVOICE, label: "Firm Invoice" },
+    { value: BillingInputSource.PLATFORM_TIMESHEETS, label: "Platform Timesheets" },
+  ],
+  expensePolicies: [
+    { value: BillingExpensesPolicy.ALLOWED, label: "Allowed" },
+    { value: BillingExpensesPolicy.BILLABLE_AS_INCURRED, label: "Allowed with receipts" },
+    { value: BillingExpensesPolicy.NOT_ALLOWED, label: "Not Allowed" },
+  ],
+  travelTimeRateTypes: [
+    { value: TravelTimeRateType.FREE, label: "Free" },
+    { value: TravelTimeRateType.CUSTOM_HOURLY, label: "Custom Hourly Rate" },
+    { value: TravelTimeRateType.FULL_HOURLY, label: "Full Hourly Rate" },
+  ],
+  billingModes: [
+    { value: BillingMode.DEPOSIT_BASED, label: "Deposit-based" },
+    { value: BillingMode.MILESTONE, label: "Progress billing" },
+    { value: BillingMode.STANDARD, label: "Final invoice only" },
+  ],
+  fedArbFeeTypes: [
+    { value: "ARBITRATION", label: "Arbitration" },
+    { value: "MEDIATION", label: "Mediation" },
+    { value: "EXPERT", label: "Expert" },
+  ],
+  timekeeperRoles: ["Associate", "Paralegal", "Law Clerk", "Co-Neutral"],
+  timekeeperRates: [150, 200, 250, 300, 350],
+});
+
+const userDisplayName = (user) => {
+  if (!user) return null;
+  return [user.firstName, user.lastName].filter(Boolean).join(" ").trim()
+    || user.email
+    || null;
+};
+
+const inferUiFeeType = (config) => {
+  if (!config?.billingType) return null;
+  if (config.billingType === BillingType.FLAT) return "FLAT";
+  if (config.billingType === BillingType.HYBRID) {
+    return config.customRate != null ? "CUSTOM" : "HYBRID";
+  }
+  if (
+    config.billingType === BillingType.HOURLY
+    && config.neutralDailyRate != null
+    && config.neutralHourlyRate == null
+  ) {
+    return "DAILY";
+  }
+  return "HOURLY";
+};
+
+const inferUiFedArbFeeType = (storedType) => {
+  if (!storedType) return null;
+  return storedType === "CUSTOM_ADR" ? "EXPERT" : storedType;
+};
+
+const buildInvoiceContacts = (party) => {
+  const contacts = [];
+  const addContact = (contact) => {
+    if (!contact.name && !contact.email) return;
+    const key = `${contact.email || ""}:${contact.name || ""}`.toLowerCase();
+    if (!contacts.some((item) => item.key === key)) {
+      contacts.push({ ...contact, key });
+    }
+  };
+
+  addContact({
+    id: `party:${party.id}`,
+    type: "PARTY",
+    name: partyDisplayName(party),
+    email: party.email || null,
+  });
+
+  for (const representation of party.representations || []) {
+    const attorney = representation.attorney;
+    addContact({
+      id: `attorney:${attorney.id}`,
+      type: "ATTORNEY",
+      designation: representation.designation,
+      name: userDisplayName(attorney),
+      email: attorney.email || null,
+    });
+  }
+
+  for (const participant of party.caseParticipants || []) {
+    addContact({
+      id: `user:${participant.user.id}`,
+      type: participant.role,
+      name: userDisplayName(participant.user),
+      email: participant.user.email || null,
+    });
+  }
+
+  return contacts.map(({ key, ...contact }) => contact);
+};
+
+const buildCaseBillingConfigResponse = (caseContext, config) => {
+  const caseManagers = (caseContext.participants || [])
+    .filter((participant) => participant.role === "CASE_MANAGER")
+    .map((participant) => ({
+      ...participant.user,
+      isPrimary: participant.isPrimary,
+      name: userDisplayName(participant.user),
+    }));
+  const neutrals = (caseContext.participants || [])
+    .filter((participant) => participant.role === "NEUTRAL")
+    .map((participant) => ({
+      ...participant.user,
+      isPrimary: participant.isPrimary,
+      name: userDisplayName(participant.user),
+    }));
+  const payerOptions = (caseContext.parties || []).map((party) => ({
+    id: party.id,
+    casePartyId: party.id,
+    label: partyDisplayName(party),
+    side: party.side,
+    partyType: party.partyType,
+    email: party.email || null,
+    invoiceContacts: buildInvoiceContacts(party),
+  }));
+  const configured = isBillingConfigComplete(config);
+
+  return {
+    caseId: caseContext.id,
+    caseInfo: {
+      caseNumber: caseContext.caseNumber,
+      caseStatus: caseContext.lifecycleStatus,
+      lifecycleStatus: caseContext.lifecycleStatus,
+      matterName: caseContext.inquiry?.matterName || caseContext.title,
+      title: caseContext.title,
+      caseType: caseContext.caseTypeLabel || caseContext.caseType,
+      caseTypeCode: caseContext.caseType,
+      disputeType: caseContext.disputeCategory?.name || null,
+      caseManager: caseManagers.map((user) => user.name).filter(Boolean).join(", ") || null,
+      neutral: neutrals.map((user) => user.name).filter(Boolean).join(", ") || null,
+      caseManagers,
+      neutrals,
+    },
+    configuration: config
+      ? {
+          ...config,
+          feeType: inferUiFeeType(config),
+          fedArbFeeType: inferUiFedArbFeeType(config.fedArbFeeScheduleType),
+        }
+      : null,
+    payerOptions,
+    formOptions: BILLING_FORM_OPTIONS,
+    configured,
+    status: configured ? "CONFIGURED" : "INCOMPLETE",
+  };
+};
+
 const getCaseBillingConfig = async (caseId, currentUser) => {
   if (!isAuthorizedForBilling(currentUser)) {
     throw new ApiError(
@@ -218,12 +378,11 @@ const getCaseBillingConfig = async (caseId, currentUser) => {
     );
   }
   await caseService.getCaseById(caseId, currentUser);
-  const config = await billingRepository.findBillingConfigByCaseId(caseId);
-  return {
-    caseId,
-    configuration: config,
-    status: config ? "CONFIGURED" : "INCOMPLETE",
-  };
+  const [caseContext, config] = await Promise.all([
+    billingRepository.findBillingCaseContextById(caseId),
+    billingRepository.findBillingConfigByCaseId(caseId),
+  ]);
+  return buildCaseBillingConfigResponse(caseContext, config);
 };
 
 const validatePayerSplitsForCase = async (caseId, payload) => {
@@ -233,20 +392,18 @@ const validatePayerSplitsForCase = async (caseId, payload) => {
     roundingResidualCasePartyId,
   } = payload;
 
-  if (!splitBillingEnabled && payerSplits === undefined) {
-    return;
-  }
-
   const splits = payerSplits || [];
-  if (splitBillingEnabled && splits.length === 0) {
+  if (splits.length === 0) {
     throw new ApiError(
       400,
-      "At least one payer split is required when split billing is enabled.",
+      "At least one payer and invoice contact are required.",
     );
   }
-
-  if (splits.length === 0) {
-    return;
+  if (!splitBillingEnabled && splits.length > 1) {
+    throw new ApiError(
+      400,
+      "Only one payer is allowed when split billing is disabled.",
+    );
   }
 
   const partyIds = [...new Set(splits.map((row) => row.casePartyId))];
@@ -254,12 +411,38 @@ const validatePayerSplitsForCase = async (caseId, payload) => {
     throw new ApiError(400, "Duplicate payers are not allowed in split billing.");
   }
 
-  const parties = await prisma.caseParty.findMany({
-    where: { caseId, id: { in: partyIds } },
-    select: { id: true },
-  });
+  const parties = await billingRepository.findCasePartyIds(caseId, partyIds);
   if (parties.length !== partyIds.length) {
     throw new ApiError(400, "One or more payer parties do not belong to this case.");
+  }
+
+  if (splits.some((row) => !row.invoiceContactEmail && !row.invoiceContactName?.trim())) {
+    throw new ApiError(400, "An invoice contact is required for every payer.");
+  }
+
+  if (splitBillingEnabled) {
+    if (splits.some((row) => row.splitPercentage == null)) {
+      throw new ApiError(
+        400,
+        "A split percentage is required for every payer when split billing is enabled.",
+      );
+    }
+    const total = splits.reduce(
+      (sum, row) => sum + Number(row.splitPercentage || 0),
+      0,
+    );
+    if (Math.abs(total - 100) > 0.01) {
+      throw new ApiError(
+        400,
+        "Split percentages must total exactly 100% when split billing is enabled.",
+      );
+    }
+    if (!roundingResidualCasePartyId) {
+      throw new ApiError(
+        400,
+        "Rounding residual payer is required when split billing is enabled.",
+      );
+    }
   }
 
   if (
@@ -287,16 +470,19 @@ const isBillingConfigComplete = (config) => {
   if (!config.billingType) return false;
   const splits = config.payerSplits || [];
   if (splits.length === 0) return false;
-  const hasContact = splits.some(
+  const everyPayerHasContact = splits.every(
     (s) => s.invoiceContactEmail || s.invoiceContactName,
   );
-  if (!hasContact) return false;
+  if (!everyPayerHasContact) return false;
   if (config.splitBillingEnabled) {
     const total = splits.reduce(
       (sum, s) => sum + Number(s.splitPercentage || 0),
       0,
     );
     if (Math.abs(total - 100) > 0.01) return false;
+    if (!config.roundingResidualCasePartyId) return false;
+  } else if (splits.length !== 1) {
+    return false;
   }
   return true;
 };
@@ -354,12 +540,60 @@ const computeInvoiceBalances = (invoice, now = new Date()) => {
   };
 };
 
-const upsertCaseBillingConfig = async (caseId, payload, currentUser) => {
+const saveCaseBillingConfig = async (caseId, payload, currentUser, operation) => {
   await assertCanMutateCaseBilling(caseId, currentUser);
   await caseService.getCaseById(caseId, currentUser);
 
+  const [caseContext, existing] = await Promise.all([
+    billingRepository.findBillingCaseContextById(caseId),
+    billingRepository.findBillingConfigByCaseId(caseId),
+  ]);
+
+  if (operation === "create" && existing) {
+    throw new ApiError(409, "A billing configuration already exists for this case.");
+  }
+  if (operation === "update" && !existing) {
+    throw new ApiError(404, "Billing configuration not found for this case.");
+  }
+
   const normalizedPayload = normalizeBillingConfigPayload(payload);
-  await validatePayerSplitsForCase(caseId, normalizedPayload);
+  const splitBillingEnabled = Object.prototype.hasOwnProperty.call(
+    normalizedPayload,
+    "splitBillingEnabled",
+  )
+    ? normalizedPayload.splitBillingEnabled
+    : Boolean(existing?.splitBillingEnabled);
+
+  if (Array.isArray(normalizedPayload.payerSplits)) {
+    normalizedPayload.payerSplits = normalizedPayload.payerSplits.map((row) => ({
+      ...row,
+      splitPercentage: splitBillingEnabled ? row.splitPercentage : 100,
+    }));
+  }
+  if (!splitBillingEnabled) {
+    normalizedPayload.roundingResidualCasePartyId = null;
+  }
+
+  const effectiveConfiguration = {
+    ...(existing || {}),
+    ...normalizedPayload,
+    splitBillingEnabled,
+    payerSplits: Array.isArray(normalizedPayload.payerSplits)
+      ? normalizedPayload.payerSplits
+      : existing?.payerSplits || [],
+  };
+
+  if (
+    effectiveConfiguration.travelTimeRateType === TravelTimeRateType.CUSTOM_HOURLY
+    && effectiveConfiguration.travelTimeCustomHourlyRate == null
+  ) {
+    throw new ApiError(
+      400,
+      "travelTimeCustomHourlyRate is required when travel time uses a custom hourly rate.",
+    );
+  }
+
+  await validatePayerSplitsForCase(caseId, effectiveConfiguration);
   const {
     payerSplits,
     additionalTimekeepers,
@@ -405,10 +639,7 @@ const upsertCaseBillingConfig = async (caseId, payload, currentUser) => {
         }));
 
   return runTransaction(async (tx) => {
-    const previous = await tx.billingConfiguration.findUnique({
-      where: { caseId },
-      select: billingRepository.billingConfigSelect,
-    });
+    const previous = await billingRepository.findBillingConfigByCaseId(caseId, tx);
     const saved = await billingRepository.upsertBillingConfig(
       caseId,
       {
@@ -419,8 +650,8 @@ const upsertCaseBillingConfig = async (caseId, payload, currentUser) => {
       tx,
     );
 
-    await tx.auditLog.create({
-      data: {
+    await billingRepository.createBillingAuditLog(
+      {
         actingUserId: currentUser.id,
         actingUserRoleSnapshot: currentUser.role?.name || null,
         action: previous
@@ -432,11 +663,21 @@ const upsertCaseBillingConfig = async (caseId, payload, currentUser) => {
         previousValue: previous ? JSON.parse(JSON.stringify(previous)) : null,
         newValue: JSON.parse(JSON.stringify(saved)),
       },
-    });
+      tx,
+    );
 
-    return saved;
+    return buildCaseBillingConfigResponse(caseContext, saved);
   });
 };
+
+const createCaseBillingConfig = (caseId, payload, currentUser) =>
+  saveCaseBillingConfig(caseId, payload, currentUser, "create");
+
+const updateCaseBillingConfig = (caseId, payload, currentUser) =>
+  saveCaseBillingConfig(caseId, payload, currentUser, "update");
+
+const upsertCaseBillingConfig = (caseId, payload, currentUser) =>
+  saveCaseBillingConfig(caseId, payload, currentUser, "upsert");
 
 const getBillingConfigurationsList = async (query, currentUser) => {
   if (!isAuthorizedForBilling(currentUser)) {
@@ -2408,6 +2649,8 @@ const generateNeutralPaymentStatement = async (caseId, data, currentUser) => {
 
 module.exports = {
   getCaseBillingConfig,
+  createCaseBillingConfig,
+  updateCaseBillingConfig,
   upsertCaseBillingConfig,
   getBillingConfigurationsList,
   getApprovedTimesheets,
