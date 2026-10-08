@@ -9,6 +9,7 @@ const {
 } = require("../constants/permission.constants");
 const {
   reportIdSchema,
+  reportCatalogueQuerySchema,
   reportQuerySchema,
 } = require("../validations/report.validation");
 
@@ -19,6 +20,7 @@ router.use(auth);
 router.get(
   "/",
   requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
+  validate(reportCatalogueQuerySchema, "query"),
   reportController.listReports,
 );
 

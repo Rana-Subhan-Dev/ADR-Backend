@@ -95,6 +95,7 @@ model Contact {
   company   String?
   email     String?
   phone     String?
+  state     String?
   role      String?
   notes     String?
 
@@ -106,6 +107,7 @@ model Contact {
 
   @@index([ownerUserId])
   @@index([role])
+  @@index([state])
   @@map("contacts")
 }
 

@@ -40,12 +40,34 @@ const parseDateBound = (value, endOfDay = false) => {
 const agingBucketFromDueDate = (dueDate, now = new Date()) => {
   if (!dueDate) return null;
   const due = new Date(dueDate);
-  const diffDays = Math.floor((now - due) / (1000 * 60 * 60 * 24));
+  const today = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+  const dueDay = new Date(
+    Date.UTC(due.getUTCFullYear(), due.getUTCMonth(), due.getUTCDate()),
+  );
+  const diffDays = Math.floor((today - dueDay) / (1000 * 60 * 60 * 24));
   if (diffDays <= 0) return "current";
   if (diffDays <= 30) return "1-30";
   if (diffDays <= 60) return "31-60";
   if (diffDays <= 90) return "61-90";
   return "90+";
+};
+
+const agingDueDateRange = (bucket, now = new Date()) => {
+  const today = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+  const daysAgo = (days) =>
+    new Date(today.getTime() - days * 24 * 60 * 60 * 1000);
+  const ranges = {
+    current: { gte: today, lt: now },
+    "1-30": { gte: daysAgo(30), lt: today },
+    "31-60": { gte: daysAgo(60), lt: daysAgo(30) },
+    "61-90": { gte: daysAgo(90), lt: daysAgo(60) },
+    "90+": { lt: daysAgo(90) },
+  };
+  return ranges[bucket] || null;
 };
 
 const buildCaseReportFilters = (currentUser, query) => {
@@ -121,12 +143,63 @@ const buildCaseReportFilters = (currentUser, query) => {
       : { AND: filters };
 };
 
-const listReports = () => ({
-  reports: REPORT_DEFINITIONS.map((report) => ({
+const listReports = (query = {}) => {
+  const page = Number(query.page) || 1;
+  const limit = Math.min(Number(query.limit) || 100, 100);
+  const generatedAt = new Date();
+  let reports = REPORT_DEFINITIONS.map((report) => ({
     ...report,
-    generated: report.generated || new Date().toISOString(),
-  })),
-});
+    generated: report.generated || generatedAt.toISOString(),
+  }));
+
+  if (query.search) {
+    const search = query.search.toLocaleLowerCase();
+    reports = reports.filter((report) =>
+      [report.name, report.description, ...(report.keyFields || [])].some(
+        (value) =>
+          String(value || "")
+            .toLocaleLowerCase()
+            .includes(search),
+      ),
+    );
+  }
+  if (query.category) {
+    const category = query.category.toLocaleLowerCase();
+    reports = reports.filter(
+      (report) => report.category.toLocaleLowerCase() === category,
+    );
+  }
+  if (query.dataset) {
+    const dataset = query.dataset.toLocaleLowerCase();
+    reports = reports.filter(
+      (report) => report.dataset.toLocaleLowerCase() === dataset,
+    );
+  }
+  if (query.reportType) {
+    const reportType = query.reportType.toLocaleLowerCase();
+    reports = reports.filter(
+      (report) => report.reportType.toLocaleLowerCase() === reportType,
+    );
+  }
+
+  const dateFrom = parseDateBound(query.dateFrom);
+  const dateTo = parseDateBound(query.dateTo, true);
+  if (dateFrom || dateTo) {
+    reports = reports.filter((report) => {
+      const generated = new Date(report.generated);
+      return (
+        (!dateFrom || generated >= dateFrom) && (!dateTo || generated <= dateTo)
+      );
+    });
+  }
+
+  const total = reports.length;
+  const skip = (page - 1) * limit;
+  return {
+    reports: reports.slice(skip, skip + limit),
+    pagination: paginationMeta(page, limit, total),
+  };
+};
 
 const mapCaseStatusRow = (caseRecord) => {
   const mapped = mapCase(caseRecord);
@@ -236,20 +309,44 @@ const fetchInquiryStatusRows = async (currentUser, query) => {
 const fetchContactRows = async (query, { neutralOnly = false } = {}) => {
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 10;
-  const where = {};
+  const filters = [];
   if (neutralOnly) {
-    where.role = { contains: "neutral", mode: "insensitive" };
+    filters.push({ role: { contains: "neutral", mode: "insensitive" } });
+  }
+  if (query.role) {
+    filters.push({
+      role: { contains: query.role, mode: "insensitive" },
+    });
+  }
+  if (query.state) {
+    filters.push({
+      state: { contains: query.state, mode: "insensitive" },
+    });
+  }
+  const dateFrom = parseDateBound(query.dateFrom || query.fromDate);
+  const dateTo = parseDateBound(query.dateTo || query.toDate, true);
+  if (dateFrom || dateTo) {
+    filters.push({
+      updatedAt: {
+        ...(dateFrom && { gte: dateFrom }),
+        ...(dateTo && { lte: dateTo }),
+      },
+    });
   }
   if (query.search) {
     const term = { contains: query.search, mode: "insensitive" };
-    where.OR = [
-      { name: term },
-      { email: term },
-      { phone: term },
-      { role: term },
-      { company: term },
-    ];
+    filters.push({
+      OR: [
+        { name: term },
+        { email: term },
+        { phone: term },
+        { role: term },
+        { company: term },
+        { state: term },
+      ],
+    });
   }
+  const where = filters.length ? { AND: filters } : {};
   const [contacts, total] = await prisma.$transaction([
     prisma.contact.findMany({
       where,
@@ -266,7 +363,7 @@ const fetchContactRows = async (query, { neutralOnly = false } = {}) => {
       company: contact.company || null,
       email: contact.email,
       phone: contact.phone,
-      state: null,
+      state: contact.state || null,
       updated: contact.updatedAt,
     })),
     pagination: paginationMeta(page, limit, total),
@@ -377,10 +474,10 @@ const fetchOverdueInvoicesRows = async (currentUser, query) => {
   const where = {
     invoiceStatus: { not: "VOID" },
     paymentStatus: { in: ["UNPAID", "PARTIAL"] },
-    dueDate: { lt: now },
     ...(caseFilters.length
       ? {
-          case: caseFilters.length === 1 ? caseFilters[0] : { AND: caseFilters },
+          case:
+            caseFilters.length === 1 ? caseFilters[0] : { AND: caseFilters },
         }
       : {}),
   };
@@ -397,14 +494,21 @@ const fetchOverdueInvoicesRows = async (currentUser, query) => {
   }
   const dateFrom = parseDateBound(query.dateFrom || query.fromDate);
   const dateTo = parseDateBound(query.dateTo || query.toDate, true);
+  const dueDateFilters = [{ dueDate: { lt: now } }];
   if (dateFrom || dateTo) {
-    where.dueDate = {
-      ...(where.dueDate || {}),
-      ...(dateFrom && { gte: dateFrom }),
-      ...(dateTo && { lte: dateTo }),
-      lt: now,
-    };
+    dueDateFilters.push({
+      dueDate: {
+        ...(dateFrom && { gte: dateFrom }),
+        ...(dateTo && { lte: dateTo }),
+      },
+    });
   }
+  if (query.agingBucket) {
+    dueDateFilters.push({
+      dueDate: agingDueDateRange(query.agingBucket, now),
+    });
+  }
+  where.AND = [...(where.AND || []), ...dueDateFilters];
 
   const [invoices, total] = await prisma.$transaction([
     prisma.invoice.findMany({
@@ -442,7 +546,7 @@ const fetchOverdueInvoicesRows = async (currentUser, query) => {
     prisma.invoice.count({ where }),
   ]);
 
-  let rows = invoices.map((invoice) => {
+  const rows = invoices.map((invoice) => {
     const paid = (invoice.payments || []).reduce(
       (sum, p) => sum + Number(p.amount || 0),
       0,
@@ -451,7 +555,10 @@ const fetchOverdueInvoicesRows = async (currentUser, query) => {
       (sum, c) => sum + Number(c.amount || 0),
       0,
     );
-    const openBalance = Math.max(0, Number(invoice.amountDue) - paid - credited);
+    const openBalance = Math.max(
+      0,
+      Number(invoice.amountDue) - paid - credited,
+    );
     const aging = agingBucketFromDueDate(invoice.dueDate, now);
     return {
       matter: invoice.case?.title || invoice.case?.caseNumber,
@@ -470,13 +577,6 @@ const fetchOverdueInvoicesRows = async (currentUser, query) => {
       invoiceNumber: invoice.invoiceNumber,
     };
   });
-
-  if (query.agingBucket) {
-    const wanted = String(query.agingBucket).toLowerCase();
-    rows = rows.filter(
-      (row) => String(row.agingBucket || "").toLowerCase() === wanted,
-    );
-  }
 
   return {
     rows,

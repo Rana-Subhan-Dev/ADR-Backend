@@ -8,6 +8,7 @@ const contactSelect = {
   company: true,
   email: true,
   phone: true,
+  state: true,
   role: true,
   notes: true,
   ownerUserId: true,

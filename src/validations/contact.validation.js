@@ -19,6 +19,7 @@ const createContactSchema = Joi.object({
   company: Joi.string().trim().max(255).allow("", null).optional(),
   email: Joi.string().email().trim().lowercase().required(),
   phone: phoneRequired,
+  state: Joi.string().trim().max(100).allow("", null).optional(),
   role: Joi.string()
     .valid(...CONTACT_ROLES)
     .required(),
@@ -47,6 +48,7 @@ const updateContactSchema = Joi.object({
     .pattern(/^[0-9+\-\s()]+$/)
     .max(50)
     .optional(),
+  state: Joi.string().trim().max(100).allow("", null).optional(),
   role: Joi.string()
     .valid(...CONTACT_ROLES)
     .optional(),
@@ -60,6 +62,7 @@ const listContactsSchema = Joi.object({
   role: Joi.string()
     .valid(...CONTACT_ROLES)
     .optional(),
+  state: Joi.string().trim().max(100).allow("").optional(),
   ownerUserId: Joi.string().uuid().optional(),
   mine: Joi.boolean().optional(),
 });

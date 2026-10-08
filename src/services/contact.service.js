@@ -22,9 +22,7 @@ const mapContact = (contact) => {
     firstName,
     lastName,
     name:
-      contact.name ||
-      composeName(firstName, lastName, contact.email) ||
-      null,
+      contact.name || composeName(firstName, lastName, contact.email) || null,
     company: contact.company || null,
   };
 };
@@ -48,9 +46,9 @@ const buildWritePayload = (data, { requireNames = false } = {}) => {
       ? emptyToNull(data.lastName?.trim())
       : undefined;
   const company =
-    data.company !== undefined
-      ? emptyToNull(data.company?.trim())
-      : undefined;
+    data.company !== undefined ? emptyToNull(data.company?.trim()) : undefined;
+  const state =
+    data.state !== undefined ? emptyToNull(data.state?.trim()) : undefined;
 
   let name = data.name !== undefined ? data.name?.trim() : undefined;
   if (firstName !== undefined || lastName !== undefined) {
@@ -66,15 +64,14 @@ const buildWritePayload = (data, { requireNames = false } = {}) => {
       firstName: parts[0] || null,
       lastName: parts.slice(1).join(" ") || null,
       ...(company !== undefined && { company }),
+      ...(state !== undefined && { state }),
       email:
         data.email !== undefined
           ? emptyToNull(data.email?.trim()?.toLowerCase())
           : undefined,
-      phone:
-        data.phone !== undefined ? emptyToNull(data.phone) : undefined,
+      phone: data.phone !== undefined ? emptyToNull(data.phone) : undefined,
       role: data.role !== undefined ? emptyToNull(data.role) : undefined,
-      notes:
-        data.notes !== undefined ? emptyToNull(data.notes) : undefined,
+      notes: data.notes !== undefined ? emptyToNull(data.notes) : undefined,
     };
   }
 
@@ -83,6 +80,7 @@ const buildWritePayload = (data, { requireNames = false } = {}) => {
     ...(firstName !== undefined && { firstName }),
     ...(lastName !== undefined && { lastName }),
     ...(company !== undefined && { company }),
+    ...(state !== undefined && { state }),
     ...(data.email !== undefined && {
       email: emptyToNull(data.email?.trim()?.toLowerCase()),
     }),
@@ -107,6 +105,9 @@ const getContacts = async (query, currentUser) => {
   }
 
   if (query.role) where.role = query.role;
+  if (query.state) {
+    where.state = { contains: query.state, mode: "insensitive" };
+  }
 
   if (query.search) {
     const term = { contains: query.search, mode: "insensitive" };
@@ -120,6 +121,7 @@ const getContacts = async (query, currentUser) => {
           { company: term },
           { email: term },
           { phone: term },
+          { state: term },
           { role: term },
         ],
       },
@@ -168,7 +170,10 @@ const createContact = async (data, currentUser) => {
 const updateContact = async (contactId, data, currentUser) => {
   const existing = await getContactById(contactId, currentUser);
   if (!isAdmin(currentUser) && existing.ownerUserId !== currentUser.id) {
-    throw new ApiError(403, "You do not have permission to update this contact.");
+    throw new ApiError(
+      403,
+      "You do not have permission to update this contact.",
+    );
   }
   const payload = buildWritePayload({
     ...existing,
@@ -177,15 +182,16 @@ const updateContact = async (contactId, data, currentUser) => {
       data.firstName !== undefined ? data.firstName : existing.firstName,
     lastName: data.lastName !== undefined ? data.lastName : existing.lastName,
   });
-  return mapContact(
-    await contactRepository.updateContact(contactId, payload),
-  );
+  return mapContact(await contactRepository.updateContact(contactId, payload));
 };
 
 const deleteContact = async (contactId, currentUser) => {
   const existing = await getContactById(contactId, currentUser);
   if (!isAdmin(currentUser) && existing.ownerUserId !== currentUser.id) {
-    throw new ApiError(403, "You do not have permission to delete this contact.");
+    throw new ApiError(
+      403,
+      "You do not have permission to delete this contact.",
+    );
   }
   await contactRepository.deleteContact(contactId);
   return { id: contactId, deleted: true };

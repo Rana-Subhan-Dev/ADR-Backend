@@ -8,7 +8,7 @@ const listReports = asyncHandler(async (req, res) =>
     .json(
       new ApiResponse(
         200,
-        reportService.listReports(),
+        reportService.listReports(req.query),
         "Reports catalogue fetched successfully.",
       ),
     ),

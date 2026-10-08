@@ -71,7 +71,7 @@ const REPORT_DEFINITIONS = [
     keyFields: ["Contact Name", "Type", "Email", "Phone", "State"],
     permission: "All Users",
     dataset: "contacts",
-    filters: ["search"],
+    filters: ["dateFrom", "dateTo", "state", "role", "search"],
     generated: null,
   },
   {
@@ -83,7 +83,7 @@ const REPORT_DEFINITIONS = [
     keyFields: ["Contact Name", "Email", "Phone", "Last Updated"],
     permission: "All Users",
     dataset: "contacts",
-    filters: ["search"],
+    filters: ["dateFrom", "dateTo", "state", "role", "search"],
     generated: null,
   },
   {
@@ -117,7 +117,8 @@ const REPORT_DEFINITIONS = [
     name: "Overdue Invoices Report",
     category: "Financial",
     reportType: "financial",
-    description: "Invoices past due on accessible cases (due date + open balance).",
+    description:
+      "Invoices past due on accessible cases (due date + open balance).",
     keyFields: [
       "Case / Matter",
       "Neutral",
