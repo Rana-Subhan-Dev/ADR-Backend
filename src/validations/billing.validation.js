@@ -8,6 +8,8 @@ const {
   CaseType,
   InvoiceType,
   InvoiceStatus,
+  InvoiceReviewStatus,
+  InvoiceAudience,
   PaymentStatus,
   IntegrationSyncStatus,
   TimesheetActivityType,
@@ -91,7 +93,12 @@ const caseBillingConfigSchema = Joi.object({
   neutralDailyRate: rateSchema.optional(),
   caseManagementHourlyRate: rateSchema.optional(),
   flatFeeAmount: moneySchema.optional(),
-  includedHearingDays: Joi.number().integer().min(0).max(365).allow(null).optional(),
+  includedHearingDays: Joi.number()
+    .integer()
+    .min(0)
+    .max(365)
+    .allow(null)
+    .optional(),
   includedPrePostHearingHours: Joi.number()
     .precision(2)
     .min(0)
@@ -101,7 +108,11 @@ const caseBillingConfigSchema = Joi.object({
   overageHourlyRate: rateSchema.optional(),
   additionalDayRate: rateSchema.optional(),
   customRate: moneySchema.optional(),
-  customRateDescription: Joi.string().trim().max(500).allow(null, "").optional(),
+  customRateDescription: Joi.string()
+    .trim()
+    .max(500)
+    .allow(null, "")
+    .optional(),
   expensesPolicy: enumOrAlias(
     normalizeExpensesPolicyInput,
     Object.values(BillingExpensesPolicy),
@@ -192,22 +203,52 @@ const listBillingConfigurationsSchema = Joi.object({
   billingType: enumOrAlias(
     normalizeBillingTypeInput,
     Object.values(BillingType),
-  ).optional(),
+  )
+    .allow("")
+    .optional(),
   billingInputSource: enumOrAlias(
     normalizeBillingInputSourceInput,
     Object.values(BillingInputSource),
-  ).optional(),
+  )
+    .allow("")
+    .optional(),
   billingMode: enumOrAlias(
     normalizeBillingModeInput,
     Object.values(BillingMode),
-  ).optional(),
-  status: Joi.string().valid("CONFIGURED", "INCOMPLETE").optional(),
-  caseStatus: Joi.string().optional(),
-  caseType: Joi.string().optional(),
-  neutralUserId: Joi.string().uuid().optional(),
-  payerPartyId: Joi.string().uuid().optional(),
-  fromDate: Joi.date().iso().optional(),
-  toDate: Joi.date().iso().optional(),
+  )
+    .allow("")
+    .optional(),
+  status: Joi.string()
+    .trim()
+    .uppercase()
+    .valid("CONFIGURED", "INCOMPLETE", "NOT_CONFIGURED", "")
+    .optional(),
+  caseStatus: Joi.string().trim().allow("").optional(),
+  caseType: Joi.string()
+    .trim()
+    .uppercase()
+    .valid(...Object.values(CaseType), "")
+    .optional(),
+  neutralUserId: Joi.string()
+    .uuid()
+    .allow("")
+    .optional()
+    .messages({ "string.guid": "neutralUserId must be a valid UUID" }),
+  payerCasePartyId: Joi.string()
+    .uuid()
+    .allow("")
+    .optional()
+    .messages({ "string.guid": "payerCasePartyId must be a valid UUID" }),
+  // Backward-compatible alias retained for existing clients.
+  payerPartyId: Joi.string()
+    .uuid()
+    .allow("")
+    .optional()
+    .messages({ "string.guid": "payerPartyId must be a valid UUID" }),
+  fromDate: Joi.date().iso().allow("").optional(),
+  toDate: Joi.date().iso().allow("").optional(),
+  updatedFrom: Joi.date().iso().allow("").optional(),
+  updatedTo: Joi.date().iso().allow("").optional(),
   sortBy: Joi.string()
     .valid("createdAt", "updatedAt", "caseNumber", "title")
     .default("createdAt"),
@@ -238,7 +279,11 @@ const listApprovedTimesheetsSchema = Joi.object({
 
 const lineItemInputSchema = Joi.object({
   description: Joi.string().trim().min(1).max(500).required(),
-  secondaryDescription: Joi.string().trim().max(1000).allow(null, "").optional(),
+  secondaryDescription: Joi.string()
+    .trim()
+    .max(1000)
+    .allow(null, "")
+    .optional(),
   quantity: Joi.number().precision(2).positive().max(999999.99).default(1),
   unitPrice: Joi.number().precision(2).min(0).max(9999999999.99).required(),
   amount: Joi.number().precision(2).min(0).max(9999999999.99).optional(),
@@ -261,6 +306,10 @@ const generateInvoiceSchema = Joi.object({
   invoiceType: Joi.string()
     .valid(...Object.values(InvoiceType))
     .required(),
+  audience: Joi.string()
+    .valid(...Object.values(InvoiceAudience))
+    .default(InvoiceAudience.CLIENT),
+  currency: Joi.string().trim().uppercase().length(3).default("USD"),
   billingInputSource: Joi.string()
     .valid(...Object.values(BillingInputSource))
     .optional(),
@@ -280,11 +329,16 @@ const generateInvoiceSchema = Joi.object({
   specialInstructions: Joi.string().max(5000).allow(null, "").optional(),
   timesheetIds: Joi.array().items(Joi.string().uuid()).optional(),
   lineItems: Joi.array().items(lineItemInputSchema).optional(),
-  attachments: Joi.array().items(attachmentInputSchema).max(50).optional(),
+  attachments: Joi.array()
+    .items(attachmentInputSchema)
+    .max(50)
+    .unique("documentId")
+    .optional(),
   amountDue: Joi.number().precision(2).min(0).max(9999999999.99).optional(),
 });
 
 const updateInvoiceSchema = Joi.object({
+  expectedVersion: Joi.number().integer().min(1).required(),
   payerCasePartyId: Joi.string().uuid().allow(null).optional(),
   dueDate: Joi.date().iso().allow(null).optional(),
   invoiceDate: Joi.date().iso().allow(null).optional(),
@@ -300,8 +354,12 @@ const updateInvoiceSchema = Joi.object({
   notes: Joi.string().max(5000).allow(null, "").optional(),
   lineItems: Joi.array().items(lineItemInputSchema).optional(),
   amountDue: Joi.number().precision(2).min(0).max(9999999999.99).optional(),
-  attachments: Joi.array().items(attachmentInputSchema).max(50).optional(),
-}).min(1);
+  attachments: Joi.array()
+    .items(attachmentInputSchema)
+    .max(50)
+    .unique("documentId")
+    .optional(),
+}).min(2);
 
 const invoiceBatchIdParamSchema = Joi.object({
   batchId: Joi.string().uuid().required(),
@@ -325,28 +383,60 @@ const listInvoicesSchema = Joi.object({
   invoiceType: Joi.string()
     .valid(...Object.values(InvoiceType))
     .optional(),
+  reviewStatus: Joi.string()
+    .valid(...Object.values(InvoiceReviewStatus))
+    .optional(),
+  audience: Joi.string()
+    .valid(...Object.values(InvoiceAudience))
+    .optional(),
   payerCasePartyId: Joi.string().uuid().optional(),
+  caseNumber: Joi.string().trim().max(100).optional(),
   quickBooksSyncStatus: Joi.string()
     .valid(...Object.values(IntegrationSyncStatus))
     .optional(),
   fromDate: Joi.date().iso().optional(),
   toDate: Joi.date().iso().optional(),
+  invoiceDateFrom: Joi.date().iso().optional(),
+  invoiceDateTo: Joi.date().iso().optional(),
+  dueDateFrom: Joi.date().iso().optional(),
+  dueDateTo: Joi.date().iso().optional(),
   sortBy: Joi.string()
-    .valid("createdAt", "dueDate", "amountDue", "invoiceNumber")
+    .valid(
+      "createdAt",
+      "updatedAt",
+      "invoiceDate",
+      "dueDate",
+      "amountDue",
+      "invoiceNumber",
+    )
     .default("createdAt"),
   sortOrder: Joi.string().valid("asc", "desc").default("desc"),
 });
 
 const submitForReviewSchema = Joi.object({
   reviewNotes: Joi.string().max(1000).allow(null, "").optional(),
-  reviewerUserId: Joi.string().uuid().optional(),
+});
+
+const invoiceReviewDecisionSchema = Joi.object({
+  decision: Joi.string().valid("APPROVE", "REQUEST_CHANGES").required(),
+  notes: Joi.string().trim().max(2000).allow(null, "").optional(),
 });
 
 const sendInvoiceSchema = Joi.object({
-  recipientEmails: Joi.array().items(Joi.string().email()).min(1).required(),
+  recipientEmails: Joi.array()
+    .items(Joi.string().email())
+    .min(1)
+    .max(50)
+    .unique()
+    .required(),
   subject: Joi.string().trim().min(1).max(200).optional(),
   message: Joi.string().max(5000).allow(null, "").optional(),
   attachPdf: Joi.boolean().default(false).optional(),
+  attachmentIds: Joi.array()
+    .items(Joi.string().uuid())
+    .max(50)
+    .unique()
+    .default([]),
 });
 
 const voidInvoiceSchema = Joi.object({
@@ -413,6 +503,12 @@ const listQuickBooksSyncLogsSchema = Joi.object({
     .valid(...Object.values(IntegrationSyncStatus))
     .optional(),
   relatedRecordType: Joi.string().trim().max(50).optional(),
+  caseId: Joi.string().uuid().optional(),
+  payerCasePartyId: Joi.string()
+    .uuid()
+    .allow("")
+    .optional()
+    .messages({ "string.guid": "payerCasePartyId must be a valid UUID" }),
   search: Joi.string().trim().max(100).allow("").optional(),
   fromDate: Joi.date().iso().optional(),
   toDate: Joi.date().iso().optional(),
@@ -446,6 +542,7 @@ module.exports = {
   updateBatchAttachmentsSchema,
   listInvoicesSchema,
   submitForReviewSchema,
+  invoiceReviewDecisionSchema,
   sendInvoiceSchema,
   voidInvoiceSchema,
   reissueInvoiceSchema,

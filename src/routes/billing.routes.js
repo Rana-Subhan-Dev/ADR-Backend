@@ -120,6 +120,14 @@ router.post(
 );
 
 router.post(
+  "/invoices/:invoiceId/review-decision",
+  requirePermission(PermissionModule.BILLING, PermissionAction.APPROVE),
+  validate(validation.invoiceIdParamSchema, "params"),
+  validate(validation.invoiceReviewDecisionSchema),
+  controller.reviewInvoice,
+);
+
+router.post(
   "/invoices/:invoiceId/finalize",
   requirePermission(PermissionModule.BILLING, PermissionAction.APPROVE),
   validate(validation.invoiceIdParamSchema, "params"),
@@ -190,6 +198,7 @@ router.post(
 
 router.post(
   "/invoices/:invoiceId/sync-quickbooks",
+  requireInternalRole(RoleName.SUPER_ADMIN, RoleName.ACCOUNTING_STAFF),
   requirePermission(PermissionModule.BILLING, PermissionAction.EDIT),
   validate(validation.invoiceIdParamSchema, "params"),
   controller.syncInvoiceToQuickBooks,
@@ -210,11 +219,7 @@ router.get(
 
 router.post(
   "/quickbooks/retry-sync",
-  requireInternalRole(
-    RoleName.SUPER_ADMIN,
-    RoleName.ACCOUNTING_STAFF,
-    RoleName.CASE_MANAGER,
-  ),
+  requireInternalRole(RoleName.SUPER_ADMIN, RoleName.ACCOUNTING_STAFF),
   requirePermission(PermissionModule.BILLING, PermissionAction.EDIT),
   validate(validation.retryQuickBooksSyncSchema),
   controller.retryQuickBooksSync,

@@ -55,7 +55,7 @@ model User {
   auditLogs                  AuditLog[]
   legalAcknowledgements      LegalAcknowledgement[]
   notifications              Notification[]
-  ownedContacts              Contact[]                   @relation("ContactOwner")
+  ownedContacts              Contact[]                @relation("ContactOwner")
 
   // ----------------------------------------------------------
   // Case-management domain relations
@@ -79,6 +79,8 @@ model User {
   docuSignEnvelopesSent      DocuSignEnvelope[]          @relation("DocuSignEnvelopeSender")
   invoiceBatchesCreated      InvoiceBatch[]              @relation("InvoiceBatchCreatedBy")
   invoicesFinalized          Invoice[]                   @relation("InvoiceFinalizedBy")
+  invoicesSubmittedForReview Invoice[]                   @relation("InvoiceSubmittedForReviewBy")
+  invoicesReviewed           Invoice[]                   @relation("InvoiceReviewedBy")
   importedMigrationBatches   MigrationBatch[]
   zoomAlternateHostHearings  Hearing[]                   @relation("HearingZoomAlternateHost")
 

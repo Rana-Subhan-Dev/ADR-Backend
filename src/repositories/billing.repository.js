@@ -187,6 +187,10 @@ const invoiceSelect = {
   invoiceType: true,
   invoiceStatus: true,
   paymentStatus: true,
+  reviewStatus: true,
+  audience: true,
+  currency: true,
+  version: true,
   payerCasePartyId: true,
   invoiceDate: true,
   billingInputSource: true,
@@ -203,11 +207,21 @@ const invoiceSelect = {
   amountDue: true,
   dueDate: true,
   specialInstructions: true,
+  reviewNotes: true,
+  reviewDecisionNotes: true,
+  submittedForReviewAt: true,
+  submittedForReviewByUserId: true,
+  reviewedAt: true,
+  reviewedByUserId: true,
   finalizedAt: true,
   finalizedByUserId: true,
   quickBooksInvoiceId: true,
   quickBooksSyncStatus: true,
   quickBooksLastSyncedAt: true,
+  sentAt: true,
+  voidedAt: true,
+  voidReason: true,
+  reissuedFromInvoiceId: true,
   createdAt: true,
   updatedAt: true,
   finalizedBy: {
@@ -217,6 +231,22 @@ const invoiceSelect = {
       lastName: true,
       email: true,
       role: { select: { name: true } },
+    },
+  },
+  submittedForReviewBy: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+    },
+  },
+  reviewedBy: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
     },
   },
   invoiceBatch: {
@@ -244,6 +274,14 @@ const invoiceSelect = {
               id: true,
               name: true,
               description: true,
+              caseId: true,
+              currentVersion: {
+                select: {
+                  id: true,
+                  fileSizeBytes: true,
+                  mimeType: true,
+                },
+              },
             },
           },
         },
@@ -265,6 +303,7 @@ const invoiceSelect = {
         select: {
           id: true,
           role: true,
+          isPrimary: true,
           user: {
             select: {
               id: true,
@@ -280,6 +319,7 @@ const invoiceSelect = {
           ...billingConfigScalarSelect,
           payerSplits: {
             select: {
+              id: true,
               casePartyId: true,
               invoiceContactEmail: true,
               invoiceContactName: true,
@@ -393,7 +433,19 @@ const invoiceBatchSelect = {
       attachmentType: true,
       isSelected: true,
       document: {
-        select: { id: true, name: true, description: true },
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          caseId: true,
+          currentVersion: {
+            select: {
+              id: true,
+              fileSizeBytes: true,
+              mimeType: true,
+            },
+          },
+        },
       },
     },
   },
@@ -406,6 +458,10 @@ const invoiceBatchSelect = {
       invoiceType: true,
       invoiceStatus: true,
       paymentStatus: true,
+      reviewStatus: true,
+      audience: true,
+      currency: true,
+      version: true,
       payerCasePartyId: true,
       invoiceDate: true,
       subtotal: true,
@@ -480,6 +536,7 @@ const invoiceBatchSelect = {
         select: {
           id: true,
           role: true,
+          isPrimary: true,
           user: {
             select: {
               id: true,
@@ -681,6 +738,14 @@ const findApprovedTimesheets = async ({ where, skip, take, orderBy }) => {
         submittedAt: true,
         reviewedAt: true,
         createdAt: true,
+        approvedBy: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+          },
+        },
         expenses: {
           select: {
             id: true,
@@ -688,6 +753,24 @@ const findApprovedTimesheets = async ({ where, skip, take, orderBy }) => {
             expenseDate: true,
             amount: true,
             description: true,
+            receipts: {
+              select: {
+                id: true,
+                documentId: true,
+                document: {
+                  select: {
+                    id: true,
+                    name: true,
+                    currentVersion: {
+                      select: {
+                        fileSizeBytes: true,
+                        mimeType: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
           },
         },
         neutral: {
@@ -775,6 +858,116 @@ const findInvoiceById = (id, tx = prisma) =>
   tx.invoice.findUnique({
     where: { id },
     select: invoiceSelect,
+  });
+
+const findInvoicesByIds = (ids, tx = prisma) =>
+  tx.invoice.findMany({
+    where: { id: { in: ids } },
+    select: invoiceSelect,
+  });
+
+const findInvoiceAttachmentDocuments = (caseId, documentIds, tx = prisma) =>
+  tx.document.findMany({
+    where: {
+      id: { in: documentIds },
+      caseId,
+      deletedAt: null,
+      currentVersionId: { not: null },
+    },
+    select: {
+      id: true,
+      caseId: true,
+      name: true,
+      currentVersion: {
+        select: {
+          id: true,
+          fileKey: true,
+          fileSizeBytes: true,
+          mimeType: true,
+        },
+      },
+    },
+  });
+
+const findInvoiceAttachmentsByIds = (
+  invoiceBatchId,
+  attachmentIds,
+  tx = prisma,
+) =>
+  tx.invoiceAttachment.findMany({
+    where: {
+      invoiceBatchId,
+      id: { in: attachmentIds },
+      document: {
+        deletedAt: null,
+        currentVersionId: { not: null },
+      },
+    },
+    select: {
+      id: true,
+      documentId: true,
+      attachmentType: true,
+      isSelected: true,
+      document: {
+        select: {
+          id: true,
+          name: true,
+          currentVersion: {
+            select: {
+              fileKey: true,
+              fileSizeBytes: true,
+              mimeType: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+const replaceInvoiceBatchAttachments = async (
+  invoiceBatchId,
+  attachments,
+  tx = prisma,
+) => {
+  await tx.invoiceAttachment.deleteMany({ where: { invoiceBatchId } });
+  if (attachments.length > 0) {
+    await tx.invoiceAttachment.createMany({
+      data: attachments.map((attachment) => ({
+        invoiceBatchId,
+        documentId: attachment.documentId,
+        attachmentType: attachment.attachmentType,
+        isSelected: attachment.isSelected !== false,
+      })),
+    });
+  }
+};
+
+const findInvoiceHistory = (invoiceId, tx = prisma) =>
+  tx.auditLog.findMany({
+    where: {
+      affectedRecordType: { in: ["Invoice", "Payment", "CreditNote"] },
+      OR: [
+        { affectedRecordType: "Invoice", affectedRecordId: invoiceId },
+        { newValue: { path: ["invoiceId"], equals: invoiceId } },
+      ],
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      action: true,
+      reason: true,
+      previousValue: true,
+      newValue: true,
+      createdAt: true,
+      actingUser: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+        },
+      },
+    },
   });
 
 const updateInvoice = (id, data, tx = prisma) =>
@@ -943,6 +1136,11 @@ module.exports = {
   findTimesheetsByIds,
   createInvoice,
   findInvoiceById,
+  findInvoicesByIds,
+  findInvoiceAttachmentDocuments,
+  findInvoiceAttachmentsByIds,
+  replaceInvoiceBatchAttachments,
+  findInvoiceHistory,
   findInvoiceBatchById,
   updateInvoice,
   deleteLineItemsByInvoiceId,

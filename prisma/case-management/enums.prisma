@@ -316,6 +316,18 @@ enum InvoiceStatus {
   VOID
 }
 
+enum InvoiceReviewStatus {
+  NOT_SUBMITTED
+  PENDING_REVIEW
+  APPROVED
+  CHANGES_REQUESTED
+}
+
+enum InvoiceAudience {
+  CLIENT
+  NEUTRAL
+}
+
 enum PaymentStatus {
   UNPAID
   PARTIAL

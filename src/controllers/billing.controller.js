@@ -97,6 +97,13 @@ const submitInvoiceForReview = respond(
     ),
 );
 
+const reviewInvoice = respond(
+  200,
+  "Invoice review recorded successfully.",
+  (req) =>
+    billingService.reviewInvoice(req.params.invoiceId, req.body, req.user),
+);
+
 const finalizeInvoice = respond(200, "Invoice finalized successfully.", (req) =>
   billingService.finalizeInvoice(req.params.invoiceId, req.user),
 );
@@ -104,8 +111,7 @@ const finalizeInvoice = respond(200, "Invoice finalized successfully.", (req) =>
 const finalizeInvoiceBatch = respond(
   200,
   "Invoice batch finalized successfully.",
-  (req) =>
-    billingService.finalizeInvoiceBatch(req.params.batchId, req.user),
+  (req) => billingService.finalizeInvoiceBatch(req.params.batchId, req.user),
 );
 
 const sendInvoice = respond(200, "Invoice sent successfully.", (req) =>
@@ -202,6 +208,7 @@ module.exports = {
   getInvoiceById,
   updateInvoice,
   submitInvoiceForReview,
+  reviewInvoice,
   finalizeInvoice,
   finalizeInvoiceBatch,
   sendInvoice,
