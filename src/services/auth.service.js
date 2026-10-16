@@ -49,10 +49,10 @@ const normalizeRoleForClient = (roleName) => {
   return roleName;
 };
 
-const setupUrlForClient = (roleName, token, type = "invitation") => {
+const setupUrlForClient = (roleName, email, token, type = "invitation") => {
   const normalizedRoleName = normalizeRoleForClient(roleName);
   if (type === "invitation") {
-    return `${process.env.CLIENT_URL.replace(/\/$/, "")}/auth/${normalizedRoleName}/invitation?token=${token}`;
+    return `${process.env.CLIENT_URL.replace(/\/$/, "")}/auth/${normalizedRoleName}/invitation?email=${email}&token=${token}`;
   }
   if (type === "password-reset-request") {
     return `${process.env.CLIENT_URL.replace(/\/$/, "")}/auth/${normalizedRoleName}/reset-password?token=${token}`;
@@ -120,7 +120,7 @@ const inviteUser = async (payload, invitedByUserId) => {
     },
   });
 
-  const setupUrl = setupUrlForClient(roleName, rawToken);
+  const setupUrl = setupUrlForClient(roleName, normalizedEmail, rawToken);
 
   await sendEmail(
     "Invitation to join FEDARB",
@@ -183,7 +183,7 @@ const resendInvite = async (userId, invitedByUserId) => {
     return authRepository.findUserById(userId, tx);
   });
 
-  const setupUrl = setupUrlForClient(updatedUser.role?.name, rawToken);
+  const setupUrl = setupUrlForClient(updatedUser.role?.name, updatedUser.email, rawToken);
 
   await sendEmail(
     "Invitation to join FEDARB",
@@ -355,6 +355,7 @@ const forgotPassword = async (email, requestMeta = {}) => {
   const roleName = user.role?.name || "User";
   const setupUrl = setupUrlForClient(
     roleName,
+    null,
     rawToken,
     "password-reset-request",
   );

@@ -250,7 +250,7 @@ const inviteParticipant = async (caseId, data, currentUser) => {
       tx,
     ),
   );
-  const setupUrl = setupUrlForClient(data.role, token);
+  const setupUrl = setupUrlForClient(data.role, email, token);
   await sendEmail(
     "Invitation to join FEDARB",
     invitationTemplate(data.role, setupUrl, INVITATION_EXPIRES_IN_DAYS),
@@ -336,7 +336,7 @@ const resendInvitation = async (caseId, participantId, currentUser) => {
       });
     }
   });
-  const setupUrl = setupUrlForClient(participant.role, token);
+  const setupUrl = setupUrlForClient(participant.role, participant.user.email, token);
   await sendEmail(
     "Invitation to join FEDARB",
     invitationTemplate(
