@@ -68,7 +68,7 @@ const select = {
   signedDocument: { select: documentSelect },
   sentBy: { select: userSelect },
   recipients: {
-    orderBy: [{ routingOrder: "asc" }, { createdAt: "asc" }],
+    orderBy: [{ routingOrder: "asc" }, { id: "asc" }],
     select: recipientSelect,
   },
   events: {

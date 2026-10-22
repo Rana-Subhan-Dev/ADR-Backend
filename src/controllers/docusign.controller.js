@@ -1,6 +1,9 @@
+const multer = require("multer");
 const docusignService = require("../services/docusign.service");
 const ApiResponse = require("../utils/apiResponse");
 const asyncHandler = require("../utils/asyncHandler");
+
+const webhookUpload = multer();
 
 const respond = (status, message, handler) =>
   asyncHandler(async (req, res) =>
@@ -105,33 +108,49 @@ const getSigningUrl = respond(
     ),
 );
 
-const handleWebhook = asyncHandler(async (req, res) => {
-  const rawBody = Buffer.isBuffer(req.rawBody)
-    ? req.rawBody
-    : Buffer.isBuffer(req.body)
-      ? req.body
-      : Buffer.from(
-          typeof req.body === "string"
-            ? req.body
-            : JSON.stringify(req.body || {}),
-        );
-  let payload = {};
-  try {
-    payload = JSON.parse(rawBody.toString("utf8") || "{}");
-  } catch {
-    payload = {};
+const parseDropboxSignPayload = (req) => {
+  if (typeof req.body?.json === "string") {
+    try {
+      return JSON.parse(req.body.json || "{}");
+    } catch {
+      return {};
+    }
   }
-  const signature =
-    req.get("X-DocuSign-Signature-1") ||
-    req.get("x-docusign-signature-1") ||
-    req.get("X-Authorization-Digest");
-  const result = await docusignService.handleWebhook(
-    payload,
-    rawBody,
-    signature,
-  );
-  res.status(200).json(new ApiResponse(200, result, "Webhook processed."));
-});
+  if (req.body && typeof req.body === "object" && req.body.event) {
+    return req.body;
+  }
+  if (Buffer.isBuffer(req.body)) {
+    try {
+      return JSON.parse(req.body.toString("utf8") || "{}");
+    } catch {
+      return {};
+    }
+  }
+  if (typeof req.body === "string") {
+    try {
+      return JSON.parse(req.body || "{}");
+    } catch {
+      return {};
+    }
+  }
+  return {};
+};
+
+const handleWebhook = [
+  (req, res, next) => {
+    const contentType = req.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      return require("express").json({ limit: "5mb" })(req, res, next);
+    }
+    return webhookUpload.none()(req, res, next);
+  },
+  asyncHandler(async (req, res) => {
+    const payload = parseDropboxSignPayload(req);
+    await docusignService.handleWebhook(payload);
+    // Dropbox Sign requires this exact plain-text acknowledgment.
+    res.status(200).type("text/plain").send("Hello API Event Received");
+  }),
+];
 
 module.exports = {
   listTemplates,

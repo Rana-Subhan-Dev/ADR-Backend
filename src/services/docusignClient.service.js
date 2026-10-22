@@ -1,92 +1,52 @@
 const crypto = require("crypto");
-const jwt = require("jsonwebtoken");
 const ApiError = require("../utils/apiError");
 
-let cachedToken = null;
-let cachedTokenExpiresAt = 0;
-
 const getConfig = () => {
-  const integrationKey = process.env.DOCUSIGN_INTEGRATION_KEY;
-  const userId = process.env.DOCUSIGN_USER_ID;
-  const accountId = process.env.DOCUSIGN_ACCOUNT_ID;
-  const authServer =
-    process.env.DOCUSIGN_AUTH_SERVER || "account-d.docusign.com";
+  const apiKey = process.env.DROPBOX_SIGN_API_KEY;
+  const clientId = process.env.DROPBOX_SIGN_CLIENT_ID;
   const basePath =
-    process.env.DOCUSIGN_BASE_PATH || "https://demo.docusign.net/restapi";
-  let privateKey = process.env.DOCUSIGN_RSA_PRIVATE_KEY || "";
-  privateKey = privateKey.replace(/\\n/g, "\n");
+    process.env.DROPBOX_SIGN_BASE_PATH || "https://api.hellosign.com/v3";
+  const testMode =
+    String(process.env.DROPBOX_SIGN_TEST_MODE || "true").toLowerCase() !==
+    "false";
 
-  if (!integrationKey || !userId || !accountId || !privateKey) {
+  if (!apiKey || !clientId) {
     throw new ApiError(
       503,
-      "DocuSign is not configured. Set DOCUSIGN_INTEGRATION_KEY, DOCUSIGN_USER_ID, DOCUSIGN_ACCOUNT_ID, and DOCUSIGN_RSA_PRIVATE_KEY.",
+      "Dropbox Sign is not configured. Set DROPBOX_SIGN_API_KEY and DROPBOX_SIGN_CLIENT_ID.",
     );
   }
 
-  return { integrationKey, userId, accountId, authServer, basePath, privateKey };
+  return { apiKey, clientId, basePath, testMode };
 };
 
-const requestAccessToken = async () => {
-  const now = Date.now();
-  if (cachedToken && now < cachedTokenExpiresAt - 60_000) {
-    return cachedToken;
-  }
+const authHeader = (apiKey) =>
+  `Basic ${Buffer.from(`${apiKey}:`).toString("base64")}`;
 
-  const { integrationKey, userId, authServer, privateKey } = getConfig();
-  const assertion = jwt.sign(
-    {
-      iss: integrationKey,
-      sub: userId,
-      aud: authServer,
-      scope: "signature impersonation",
-    },
-    privateKey,
-    {
-      algorithm: "RS256",
-      expiresIn: 3600,
-      header: { typ: "JWT", alg: "RS256" },
-    },
-  );
-
-  const body = new URLSearchParams({
-    grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-    assertion,
-  });
-
-  const response = await fetch(`https://${authServer}/oauth/token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-  });
-
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new ApiError(
-      502,
-      payload.error_description ||
-        payload.error ||
-        "Failed to authenticate with DocuSign.",
+const extractErrorMessage = async (response) => {
+  try {
+    const payload = await response.json();
+    return (
+      payload?.error?.error_msg ||
+      payload?.error?.error_name ||
+      payload?.error ||
+      `Dropbox Sign API error (${response.status})`
     );
+  } catch {
+    return `Dropbox Sign API error (${response.status})`;
   }
-
-  cachedToken = payload.access_token;
-  cachedTokenExpiresAt = now + Number(payload.expires_in || 3600) * 1000;
-  return cachedToken;
 };
 
 const dsFetch = async (path, { method = "GET", body, headers = {} } = {}) => {
-  const { basePath, accountId } = getConfig();
-  const token = await requestAccessToken();
-  const url = path.startsWith("http")
-    ? path
-    : `${basePath}/v2.1/accounts/${accountId}${path}`;
+  const { apiKey, basePath } = getConfig();
+  const url = path.startsWith("http") ? path : `${basePath}${path}`;
 
   const response = await fetch(url, {
     method,
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: authHeader(apiKey),
       Accept: "application/json",
-      ...(body && !(body instanceof Buffer)
+      ...(body && !(body instanceof FormData)
         ? { "Content-Type": "application/json" }
         : {}),
       ...headers,
@@ -94,7 +54,7 @@ const dsFetch = async (path, { method = "GET", body, headers = {} } = {}) => {
     body:
       body == null
         ? undefined
-        : Buffer.isBuffer(body)
+        : body instanceof FormData
           ? body
           : JSON.stringify(body),
   });
@@ -106,139 +66,262 @@ const dsFetch = async (path, { method = "GET", body, headers = {} } = {}) => {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       const message =
-        payload.message ||
-        payload.errorCode ||
-        `DocuSign API error (${response.status})`;
+        payload?.error?.error_msg ||
+        payload?.error?.error_name ||
+        payload?.error ||
+        `Dropbox Sign API error (${response.status})`;
       throw new ApiError(502, message);
     }
     return payload;
   }
 
-  const buffer = Buffer.from(await response.arrayBuffer());
   if (!response.ok) {
-    throw new ApiError(502, `DocuSign API error (${response.status})`);
+    throw new ApiError(
+      502,
+      (await extractErrorMessage(response)) ||
+        `Dropbox Sign API error (${response.status})`,
+    );
   }
-  return buffer;
+  return Buffer.from(await response.arrayBuffer());
+};
+
+const normalizeSignatureRequest = (payload) => {
+  const request = payload?.signature_request || payload;
+  const signatures = (request?.signatures || []).map((signature) => ({
+    signature_id: signature.signature_id,
+    signer_email: signature.signer_email_address,
+    signer_name: signature.signer_name,
+    status_code: signature.status_code,
+    order: signature.order,
+  }));
+
+  return {
+    envelopeId: request?.signature_request_id || null,
+    signatures,
+    raw: request,
+  };
 };
 
 const listTemplates = async () => {
-  const data = await dsFetch("/templates?count=100");
-  return (data?.envelopeTemplates || []).map((tpl) => ({
-    templateId: tpl.templateId,
-    name: tpl.name,
-    description: tpl.description || null,
-    created: tpl.created || null,
-    lastModified: tpl.lastModified || null,
+  const data = await dsFetch("/template/list?page_size=100");
+  return (data?.templates || []).map((tpl) => ({
+    templateId: tpl.template_id,
+    name: tpl.title || tpl.message || tpl.template_id,
+    description: tpl.message || null,
+    created: tpl.created_at || null,
+    lastModified: tpl.updated_at || null,
   }));
 };
+
+const buildFormFields = (recipients) =>
+  recipients.map((recipient, index) => ({
+    api_id: `signature_${index + 1}`,
+    type: "signature",
+    document_index: 0,
+    page: 1,
+    x: 72 + index * 120,
+    y: 648,
+    width: 120,
+    height: 30,
+    required: true,
+    signer: String(index),
+    name: recipient.name || `Signer ${index + 1}`,
+  }));
 
 const createAndSendEnvelopeFromDocument = async ({
   emailSubject,
   documentBase64,
+  documentFileUrl,
   documentName,
   recipients,
   templateId,
   templateRoles,
 }) => {
-  if (templateId && templateRoles?.length) {
-    return dsFetch("/envelopes", {
-      method: "POST",
-      body: {
-        emailSubject: emailSubject || "Please sign this document",
-        status: "sent",
-        templateId,
-        templateRoles: templateRoles.map((role, index) => ({
-          roleName: role.roleName || role.role || `Signer ${index + 1}`,
-          name: role.name,
-          email: role.email,
-          routingOrder: String(role.routingOrder || index + 1),
-          clientUserId: role.email,
-        })),
+  const { clientId, testMode } = getConfig();
+  const resolvedTemplateId =
+    typeof templateId === "string" && templateId.trim()
+      ? templateId.trim()
+      : null;
+
+  if (!Array.isArray(recipients) || recipients.length === 0) {
+    throw new ApiError(400, "At least one recipient is required.");
+  }
+
+  if (resolvedTemplateId && templateRoles?.length) {
+    const payload = await dsFetch(
+      "/signature_request/create_embedded_with_template",
+      {
+        method: "POST",
+        body: {
+          client_id: clientId,
+          template_ids: [resolvedTemplateId],
+          subject: emailSubject || "Please sign this document",
+          title: emailSubject || "Please sign this document",
+          test_mode: testMode,
+          allow_decline: true,
+          signers: templateRoles.map((role, index) => ({
+            role: role.roleName || role.role || `Signer ${index + 1}`,
+            name: role.name,
+            email_address: role.email,
+          })),
+        },
       },
-    });
+    );
+    return normalizeSignatureRequest(payload);
   }
 
   const signers = recipients.map((recipient, index) => ({
-    email: recipient.email,
+    email_address: recipient.email,
     name: recipient.name,
-    recipientId: String(index + 1),
-    routingOrder: String(recipient.routingOrder || index + 1),
-    clientUserId: recipient.email,
-    tabs: {
-      signHereTabs: [
-        {
-          documentId: "1",
-          pageNumber: "1",
-          xPosition: String(72 + index * 36),
-          yPosition: "648",
-        },
-      ],
-    },
+    order:
+      recipient.routingOrder != null ? recipient.routingOrder - 1 : index,
   }));
 
-  return dsFetch("/envelopes", {
+  // Prefer JSON + file_urls so signers are never lost to multipart parsing quirks.
+  if (documentFileUrl) {
+    const payload = await dsFetch("/signature_request/create_embedded", {
+      method: "POST",
+      body: {
+        client_id: clientId,
+        test_mode: testMode,
+        allow_decline: true,
+        subject: emailSubject || "Please sign this document",
+        title: emailSubject || documentName || "Please sign this document",
+        file_urls: [documentFileUrl],
+        signers,
+        form_fields_per_document: buildFormFields(recipients),
+      },
+    });
+    return normalizeSignatureRequest(payload);
+  }
+
+  if (!documentBase64) {
+    throw new ApiError(400, "Document file URL or base64 content is required.");
+  }
+
+  const pdfBuffer = Buffer.from(documentBase64, "base64");
+  const form = new FormData();
+  form.append("client_id", clientId);
+  form.append("test_mode", testMode ? "1" : "0");
+  form.append("allow_decline", "1");
+  form.append("subject", emailSubject || "Please sign this document");
+  form.append("title", emailSubject || "Please sign this document");
+  form.append("signers", JSON.stringify(signers));
+  form.append(
+    "form_fields_per_document",
+    JSON.stringify(buildFormFields(recipients)),
+  );
+  form.append(
+    "files[]",
+    new Blob([pdfBuffer], { type: "application/pdf" }),
+    documentName || "Agreement.pdf",
+  );
+
+  const payload = await dsFetch("/signature_request/create_embedded", {
     method: "POST",
-    body: {
-      emailSubject: emailSubject || "Please sign this document",
-      status: "sent",
-      documents: [
-        {
-          documentBase64,
-          name: documentName || "Agreement.pdf",
-          fileExtension: "pdf",
-          documentId: "1",
-        },
-      ],
-      recipients: { signers },
-    },
+    body: form,
   });
+  return normalizeSignatureRequest(payload);
 };
 
-const sendEnvelopeReminder = async (docusignEnvelopeId) =>
-  dsFetch(`/envelopes/${docusignEnvelopeId}?resend_envelope=true`, {
-    method: "PUT",
-    body: {},
-  });
+const sendEnvelopeReminder = async (signatureRequestId, { email, name } = {}) => {
+  if (!email) {
+    throw new ApiError(
+      400,
+      "Dropbox Sign reminders require a recipient email address.",
+    );
+  }
 
-const getEnvelope = async (docusignEnvelopeId) =>
-  dsFetch(`/envelopes/${docusignEnvelopeId}`);
+  try {
+    return await dsFetch(`/signature_request/remind/${signatureRequestId}`, {
+      method: "POST",
+      body: {
+        email_address: email,
+        ...(name ? { name } : {}),
+      },
+    });
+  } catch (error) {
+    const message = String(error?.message || "");
+    // Embedded signature requests cannot be reminded via Dropbox Sign email API.
+    if (/embedded/i.test(message)) {
+      return { skipped: true, reason: "embedded_not_supported" };
+    }
+    throw error;
+  }
+};
 
-const listEnvelopeRecipients = async (docusignEnvelopeId) =>
-  dsFetch(`/envelopes/${docusignEnvelopeId}/recipients`);
+const getEnvelope = async (signatureRequestId) =>
+  dsFetch(`/signature_request/${signatureRequestId}`);
 
-const downloadCombinedPdf = async (docusignEnvelopeId) =>
-  dsFetch(
-    `/envelopes/${docusignEnvelopeId}/documents/combined?certificate=true`,
+const listEnvelopeRecipients = async (signatureRequestId) => {
+  const data = await getEnvelope(signatureRequestId);
+  return normalizeSignatureRequest(data).signatures;
+};
+
+const downloadCombinedPdf = async (signatureRequestId) => {
+  const { apiKey, basePath } = getConfig();
+  const response = await fetch(
+    `${basePath}/signature_request/files/${signatureRequestId}?file_type=pdf`,
     {
-      headers: { Accept: "application/pdf" },
+      method: "GET",
+      headers: {
+        Authorization: authHeader(apiKey),
+        Accept: "application/pdf",
+      },
     },
   );
 
-const createRecipientView = async (
-  docusignEnvelopeId,
-  { email, userName, clientUserId, returnUrl },
-) =>
-  dsFetch(`/envelopes/${docusignEnvelopeId}/views/recipient`, {
-    method: "POST",
-    body: {
-      authenticationMethod: "none",
-      email,
-      userName,
-      clientUserId: clientUserId || email,
-      returnUrl:
-        returnUrl || process.env.CLIENT_URL || "http://localhost:3000",
-    },
-  });
+  if (!response.ok) {
+    throw new ApiError(
+      502,
+      (await extractErrorMessage(response)) ||
+        `Dropbox Sign API error (${response.status})`,
+    );
+  }
 
-const verifyWebhookHmac = (rawBody, signatureHeader) => {
-  const secret = process.env.DOCUSIGN_WEBHOOK_HMAC_SECRET;
-  if (!secret) return true;
-  if (!signatureHeader) return false;
+  return Buffer.from(await response.arrayBuffer());
+};
+
+const createRecipientView = async (
+  _signatureRequestId,
+  { signatureId },
+) => {
+  if (!signatureId) {
+    throw new ApiError(
+      400,
+      "Dropbox Sign signing URL requires a signature_id for the recipient.",
+    );
+  }
+
+  const { clientId } = getConfig();
+  const data = await dsFetch(`/embedded/sign_url/${signatureId}`);
+  const signUrl = data?.embedded?.sign_url || data?.sign_url || null;
+  if (!signUrl) {
+    throw new ApiError(502, "Dropbox Sign did not return a signing URL.");
+  }
+
+  return { url: signUrl, clientId };
+};
+
+/**
+ * Verify Dropbox Sign event_hash (HMAC-SHA256 of event_time + event_type with API key).
+ * When API key is missing, verification is skipped (same spirit as empty DocuSign HMAC secret).
+ */
+const verifyWebhookHmac = (payload) => {
+  const apiKey = process.env.DROPBOX_SIGN_API_KEY;
+  if (!apiKey) return true;
+
+  const event = payload?.event;
+  if (!event?.event_time || !event?.event_type || !event?.event_hash) {
+    return false;
+  }
+
   const digest = crypto
-    .createHmac("sha256", secret)
-    .update(rawBody)
-    .digest("base64");
-  const provided = String(signatureHeader).trim();
+    .createHmac("sha256", apiKey)
+    .update(`${event.event_time}${event.event_type}`)
+    .digest("hex");
+
+  const provided = String(event.event_hash).trim().toLowerCase();
   try {
     return crypto.timingSafeEqual(
       Buffer.from(digest),

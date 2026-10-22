@@ -3,7 +3,9 @@ const controller = require("../controllers/docusign.controller");
 
 const router = express.Router();
 
-// Body is captured as Buffer by parent route raw parser for HMAC verification.
-router.post("/", controller.handleWebhook);
+// Dropbox Sign callbacks: multipart (json field) or JSON; ack with "Hello API Event Received".
+router.post("/", ...(Array.isArray(controller.handleWebhook)
+  ? controller.handleWebhook
+  : [controller.handleWebhook]));
 
 module.exports = router;
