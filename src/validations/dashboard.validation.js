@@ -7,4 +7,11 @@ const overviewQuerySchema = Joi.object({
   followUpTo: Joi.date().iso().optional(),
 });
 
-module.exports = { overviewQuerySchema };
+const lawyerDashboardQuerySchema = Joi.object({
+  hearingsLimit: Joi.number().integer().min(1).max(50).optional(),
+  signaturesLimit: Joi.number().integer().min(1).max(50).optional(),
+  invoicesLimit: Joi.number().integer().min(1).max(50).optional(),
+  documentsLimit: Joi.number().integer().min(1).max(50).optional(),
+});
+
+module.exports = { overviewQuerySchema, lawyerDashboardQuerySchema };

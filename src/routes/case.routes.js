@@ -87,12 +87,9 @@ router.post(
 
 router.post(
   "/:id/messages",
-  requirePermission(PermissionModule.CASES, PermissionAction.EDIT),
-  requireInternalRole(
-    RoleName.SUPER_ADMIN,
-    RoleName.ADMIN_LEADERSHIP,
-    RoleName.CASE_MANAGER,
-  ),
+  // Internal + external case roles (NEUTRAL / LAWYER / CLIENT have Cases VIEW).
+  // Case membership is still enforced in messageAllParties via assertCaseAccess.
+  requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
   validate(caseIdSchema, "params"),
   validate(messageAllPartiesSchema),
   caseController.messageAllParties,

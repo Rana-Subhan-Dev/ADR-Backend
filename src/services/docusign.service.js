@@ -41,12 +41,45 @@ const formatPersonName = (user) => {
 };
 
 const PENDING_RECIPIENT_STATUSES = new Set(["SENT", "DELIVERED"]);
+const SIGNED_RECIPIENT_STATUSES = new Set(["SIGNED", "COMPLETED"]);
 const TERMINAL_ENVELOPE_STATUSES = new Set([
   "COMPLETED",
   "DECLINED",
   "FAILED",
   "EXPIRED",
 ]);
+
+const findRecipientForUser = (envelope, currentUser) => {
+  if (!currentUser) return null;
+  const email = (currentUser.email || "").toLowerCase();
+  return (envelope.recipients || []).find((recipient) => {
+    if (recipient.email && recipient.email.toLowerCase() === email) return true;
+    if (recipient.caseParticipant?.user?.id === currentUser.id) return true;
+    if (
+      recipient.caseParticipant?.user?.email &&
+      recipient.caseParticipant.user.email.toLowerCase() === email
+    )
+      return true;
+    return false;
+  }) || null;
+};
+
+const buildViewerSignFlags = (envelope, currentUser) => {
+  const myRecipient = findRecipientForUser(envelope, currentUser);
+  const myStatus = myRecipient?.status || null;
+  const alreadySigned = Boolean(
+    myStatus && SIGNED_RECIPIENT_STATUSES.has(myStatus),
+  );
+  const envelopeOpen = ["SENT", "PENDING"].includes(envelope.status);
+
+  return {
+    currentUserRecipientId: myRecipient?.id || null,
+    currentUserRecipientStatus: myStatus,
+    currentUserHasSigned: alreadySigned,
+    // FE should show Sign only when this is true — not merely when envelope is SENT.
+    canSign: Boolean(myRecipient && envelopeOpen && !alreadySigned),
+  };
+};
 
 const decorateEnvelope = (envelope, extras = {}) => {
   if (!envelope) return envelope;
@@ -57,6 +90,7 @@ const decorateEnvelope = (envelope, extras = {}) => {
       recipient.caseParticipantId ||
       recipient.caseParticipant?.id ||
       null,
+    hasSigned: SIGNED_RECIPIENT_STATUSES.has(recipient.status),
   }));
   const activity = (envelope.events || []).map((event) => ({
     ...event,
@@ -267,26 +301,129 @@ const enrichRecipientsWithParticipants = async (caseId, envelope) => {
   };
 };
 
+const syncEnvelopeFromProvider = async (envelope) => {
+  if (!envelope?.envelopeId) return envelope;
+
+  let remoteRequest;
+  try {
+    const remote = await docusignClient.getEnvelope(envelope.envelopeId);
+    remoteRequest = remote?.signature_request || remote;
+  } catch {
+    return envelope;
+  }
+  if (!remoteRequest) return envelope;
+
+  const remoteSignatures = Array.isArray(remoteRequest.signatures)
+    ? remoteRequest.signatures
+    : [];
+
+  await runTransaction(async (tx) => {
+    for (const row of remoteSignatures) {
+      const email = String(row.signer_email_address || "").toLowerCase();
+      const signatureId = row.signature_id || null;
+      const local = (envelope.recipients || []).find((r) => {
+        if (email && (r.email || "").toLowerCase() === email) return true;
+        if (
+          signatureId &&
+          r.docusignRecipientId &&
+          r.docusignRecipientId === signatureId
+        )
+          return true;
+        return false;
+      });
+      if (!local) continue;
+
+      await docusignRepository.updateRecipient(
+        local.id,
+        {
+          status: mapDsRecipientStatus(row.status_code),
+          lastActivityAt: new Date(),
+          docusignRecipientId: signatureId || local.docusignRecipientId || null,
+        },
+        tx,
+      );
+    }
+
+    if (remoteRequest.is_declined) {
+      await docusignRepository.update(
+        envelope.id,
+        { status: "DECLINED" },
+        tx,
+      );
+      return;
+    }
+    if (remoteRequest.has_error) {
+      await docusignRepository.update(envelope.id, { status: "FAILED" }, tx);
+      return;
+    }
+    if (remoteRequest.is_complete === true) {
+      await docusignRepository.update(
+        envelope.id,
+        {
+          status: "COMPLETED",
+          completedAt: envelope.completedAt || new Date(),
+        },
+        tx,
+      );
+      return;
+    }
+    if (envelope.status === "COMPLETED") {
+      await docusignRepository.update(
+        envelope.id,
+        {
+          status: "SENT",
+          completedAt: null,
+          signedDocumentId: null,
+        },
+        tx,
+      );
+    }
+  });
+
+  let synced = await docusignRepository.findById(envelope.id);
+
+  if (
+    remoteRequest.is_complete === true &&
+    synced &&
+    !synced.signedDocumentId
+  ) {
+    try {
+      synced = await finalizeSignedPdfFromProvider(synced);
+    } catch {
+      // Leave COMPLETED; signed-pdf can retry later.
+    }
+  }
+
+  return synced || envelope;
+};
+
 const getEnvelope = async (caseId, envelopeRecordId, currentUser) => {
   await caseService.getCaseById(caseId, currentUser);
-  const envelope = await docusignRepository.findById(envelopeRecordId);
+  let envelope = await docusignRepository.findById(envelopeRecordId);
   if (!envelope || envelope.caseId !== caseId)
     throw new ApiError(404, "DocuSign envelope not found.");
   assertCanViewEnvelope(envelope, currentUser);
+  // Pull latest signer/completion state from Dropbox Sign when webhooks were missed.
+  if (["SENT", "PENDING", "COMPLETED"].includes(envelope.status)) {
+    envelope = await syncEnvelopeFromProvider(envelope);
+  }
   const enriched = await enrichRecipientsWithParticipants(caseId, envelope);
-  return decorateEnvelope(enriched);
+  return decorateEnvelope(enriched, buildViewerSignFlags(enriched, currentUser));
 };
 
 const getEnvelopeByExternalId = async (caseId, envelopeId, currentUser) => {
   await caseService.getCaseById(caseId, currentUser);
-  const envelope = await docusignRepository.findByDocusignEnvelopeId(
+  let envelope = await docusignRepository.findByDocusignEnvelopeId(
     envelopeId,
   );
   if (!envelope || envelope.caseId !== caseId)
     throw new ApiError(404, "DocuSign envelope not found.");
   assertCanViewEnvelope(envelope, currentUser);
+  if (["SENT", "PENDING", "COMPLETED"].includes(envelope.status)) {
+    envelope = await syncEnvelopeFromProvider(envelope);
+  }
   const enriched = await enrichRecipientsWithParticipants(caseId, envelope);
-  return decorateEnvelope(enriched);
+  return decorateEnvelope(enriched, buildViewerSignFlags(enriched, currentUser));
 };
 
 const getEnvelopes = async (caseId, query, currentUser) => {
@@ -316,7 +453,14 @@ const getEnvelopes = async (caseId, query, currentUser) => {
     skip: (page - 1) * limit,
     take: limit,
   });
-  return paginate(envelopes.map((row) => decorateEnvelope(row)), total, page, limit);
+  return paginate(
+    envelopes.map((row) =>
+      decorateEnvelope(row, buildViewerSignFlags(row, currentUser)),
+    ),
+    total,
+    page,
+    limit,
+  );
 };
 
 const listTemplates = async (caseId, currentUser) => {
@@ -688,6 +832,30 @@ const getSignedPdfDownload = async (
 ) => {
   let envelope = await getEnvelope(caseId, envelopeRecordId, currentUser);
 
+  // Confirm with Dropbox Sign that every recipient has signed before serving.
+  if (envelope.envelopeId) {
+    try {
+      const remote = await docusignClient.getEnvelope(envelope.envelopeId);
+      const remoteRequest = remote?.signature_request || remote;
+      if (remoteRequest && remoteRequest.is_complete !== true) {
+        if (envelope.status === "COMPLETED") {
+          await docusignRepository.update(envelope.id, {
+            status: "SENT",
+            completedAt: null,
+            signedDocumentId: null,
+          });
+        }
+        throw new ApiError(
+          400,
+          "Signed PDF is not available yet. Not all recipients have signed.",
+        );
+      }
+    } catch (error) {
+      if (error instanceof ApiError && error.statusCode === 400) throw error;
+      // If provider lookup fails, fall through to local status checks.
+    }
+  }
+
   // Recover when webhook marked COMPLETED but document create previously failed.
   if (
     envelope.status === "COMPLETED" &&
@@ -765,18 +933,38 @@ const getRecipientSigningUrl = async (
     null;
   if (!target?.email)
     throw new ApiError(400, "No recipient email available for signing view.");
+  if (SIGNED_RECIPIENT_STATUSES.has(target.status)) {
+    throw new ApiError(
+      400,
+      "This recipient has already signed. Refresh the envelope for the latest status.",
+    );
+  }
   if (!target.docusignRecipientId)
     throw new ApiError(
       400,
       "Recipient has no Dropbox Sign signature id. Re-send the envelope.",
     );
 
-  const view = await docusignClient.createRecipientView(envelope.envelopeId, {
-    email: target.email,
-    userName: target.name,
-    signatureId: target.docusignRecipientId,
-    returnUrl,
-  });
+  let view;
+  try {
+    view = await docusignClient.createRecipientView(envelope.envelopeId, {
+      email: target.email,
+      userName: target.name,
+      signatureId: target.docusignRecipientId,
+      returnUrl,
+    });
+  } catch (error) {
+    const message = String(error?.message || "");
+    // Signer already finished on Dropbox Sign but local status lagged (missed webhook).
+    if (/already been signed/i.test(message)) {
+      await syncEnvelopeFromProvider(envelope);
+      throw new ApiError(
+        400,
+        "This recipient has already signed. Refresh the envelope for the latest status.",
+      );
+    }
+    throw error;
+  }
 
   const port = process.env.PORT || 8000;
   const publicBase =
@@ -798,10 +986,11 @@ const getRecipientSigningUrl = async (
 
 const mapDsEnvelopeStatus = (statusOrEvent) => {
   const normalized = String(statusOrEvent || "").toLowerCase();
+  // Only all_signed (or explicit completed) means every recipient finished.
+  // signature_request_downloadable fires after EACH signer — do not treat as complete.
   if (
     normalized === "completed" ||
-    normalized === "signature_request_all_signed" ||
-    normalized === "signature_request_downloadable"
+    normalized === "signature_request_all_signed"
   )
     return "COMPLETED";
   if (
@@ -825,6 +1014,7 @@ const mapDsEnvelopeStatus = (statusOrEvent) => {
     normalized === "signature_request_sent" ||
     normalized === "signature_request_viewed" ||
     normalized === "signature_request_signed" ||
+    normalized === "signature_request_downloadable" ||
     normalized === "signature_request_email_bounce" ||
     normalized === "awaiting_signature"
   )
@@ -932,6 +1122,23 @@ const handleWebhook = async (payload) => {
     else if (signatureRequest.has_error) mappedStatus = "FAILED";
   }
 
+  const requestFullySigned =
+    eventType === "signature_request_all_signed" ||
+    signatureRequest?.is_complete === true;
+
+  // Never mark COMPLETED until Dropbox says every signer finished.
+  // Also reverts envelopes wrongly completed early by downloadable events.
+  if (
+    signatureRequest &&
+    !signatureRequest.is_complete &&
+    !signatureRequest.is_declined &&
+    !signatureRequest.has_error
+  ) {
+    mappedStatus = "SENT";
+  } else if (requestFullySigned) {
+    mappedStatus = "COMPLETED";
+  }
+
   const recipientsPayload = signatureRequest?.signatures || [];
   const recipientRows = Array.isArray(recipientsPayload)
     ? recipientsPayload
@@ -967,17 +1174,18 @@ const handleWebhook = async (payload) => {
       failureMessage || `Dropbox Sign event: ${eventType}`;
   }
 
-  // Intermediate signed events keep envelope SENT until all signers finish.
-  if (eventType === "signature_request_signed" && !signatureRequest?.is_complete) {
-    mappedStatus = "SENT";
-  }
-
   await runTransaction(async (tx) => {
     const updateData = {
       ...(mappedStatus && { status: mappedStatus }),
       ...(failureMessage !== undefined && { failureMessage }),
       ...(mappedStatus === "COMPLETED" &&
         !envelope.completedAt && { completedAt: new Date() }),
+      // Clear premature completion if we reverted to SENT.
+      ...(mappedStatus === "SENT" &&
+        envelope.status === "COMPLETED" && {
+          completedAt: null,
+          signedDocumentId: null,
+        }),
     };
     await docusignRepository.update(envelope.id, updateData, tx);
     await addEvent(
@@ -1033,11 +1241,9 @@ const handleWebhook = async (payload) => {
     }
   });
 
+  // Final PDF + "all signed" notifications only after every recipient has signed.
   const shouldStoreSignedPdf =
-    (mappedStatus === "COMPLETED" ||
-      eventType === "signature_request_all_signed" ||
-      eventType === "signature_request_downloadable") &&
-    !envelope.signedDocumentId;
+    requestFullySigned && mappedStatus === "COMPLETED" && !envelope.signedDocumentId;
 
   if (shouldStoreSignedPdf) {
     try {

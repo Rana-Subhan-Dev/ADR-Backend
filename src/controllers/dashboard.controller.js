@@ -14,4 +14,16 @@ const getOverview = asyncHandler(async (req, res) =>
     ),
 );
 
-module.exports = { getOverview };
+const getLawyerDashboard = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await dashboardService.getLawyerDashboard(req.query, req.user),
+        "Lawyer dashboard fetched successfully.",
+      ),
+    ),
+);
+
+module.exports = { getOverview, getLawyerDashboard };
