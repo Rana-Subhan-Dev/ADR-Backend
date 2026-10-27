@@ -17,6 +17,7 @@ const {
   createCaseNoteSchema,
   updateCaseNoteSchema,
   getCaseNotesSchema,
+  replyCaseNoteSchema,
 } = require("../validations/caseNote.validation");
 
 const router = express.Router({ mergeParams: true });
@@ -36,6 +37,13 @@ router.get(
   validate(caseIdSchema, "params"),
   validate(getCaseNotesSchema, "query"),
   caseNoteController.getCaseNotes,
+);
+router.post(
+  "/:noteId/replies",
+  requirePermission(PermissionModule.CASES, PermissionAction.CREATE),
+  validate(noteIdSchema, "params"),
+  validate(replyCaseNoteSchema),
+  caseNoteController.replyToCaseNote,
 );
 router.get(
   "/:noteId",

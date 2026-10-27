@@ -7,6 +7,9 @@ const caseNoteSelect = {
   noteType: true,
   visibility: true,
   body: true,
+  relatedRecordType: true,
+  relatedRecordId: true,
+  parentNoteId: true,
   createdAt: true,
   updatedAt: true,
   author: {
@@ -15,6 +18,14 @@ const caseNoteSelect = {
       firstName: true,
       lastName: true,
       email: true,
+      jobTitle: true,
+      company: true,
+      role: { select: { name: true } },
+      attorneyProfile: {
+        select: {
+          lawFirm: { select: { id: true, name: true } },
+        },
+      },
     },
   },
 };
@@ -49,4 +60,5 @@ module.exports = {
   getCaseNotes,
   updateCaseNote,
   deleteCaseNote,
+  caseNoteSelect,
 };

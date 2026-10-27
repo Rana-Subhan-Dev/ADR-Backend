@@ -425,4 +425,347 @@ const getLawyerDashboard = async (query, currentUser) => {
   };
 };
 
-module.exports = { getOverview, getLawyerDashboard };
+const CM_DASHBOARD_ROLES = new Set([
+  RoleName.CASE_MANAGER,
+  RoleName.SUPER_ADMIN,
+  RoleName.ADMIN_LEADERSHIP,
+]);
+
+const DEFAULT_CM_HEARINGS_LIMIT = 5;
+const DEFAULT_CM_FOLLOW_UPS_LIMIT = 10;
+const DEFAULT_CM_DOCUSIGN_LIMIT = 5;
+const DEFAULT_CM_INVOICES_LIMIT = 10;
+const MAX_CALENDAR_RANGE_DAYS = 93;
+
+const neutralParticipantSelect = {
+  where: { accessStatus: "ACTIVE", role: "NEUTRAL" },
+  select: {
+    role: true,
+    user: { select: { firstName: true, lastName: true, email: true } },
+  },
+  take: 1,
+};
+
+const partyDisplayName = (party) => {
+  if (!party) return null;
+  if (party.organizationName?.trim()) return party.organizationName.trim();
+  const name = [party.firstName, party.lastName].filter(Boolean).join(" ").trim();
+  return name || null;
+};
+
+const startOfUtcDay = (date) =>
+  new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+  );
+
+const followUpDueLabel = (followUpDate, now = new Date()) => {
+  if (!followUpDate) return null;
+  const due = startOfUtcDay(new Date(followUpDate));
+  const today = startOfUtcDay(now);
+  if (due.getTime() < today.getTime()) return "Overdue";
+  if (due.getTime() === today.getTime()) return "Today";
+  return due.toISOString().slice(0, 10);
+};
+
+const defaultCalendarMonthRange = (now = new Date()) => {
+  const from = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0),
+  );
+  const to = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0, 23, 59, 59, 999),
+  );
+  return { from, to };
+};
+
+const resolveCalendarRange = (query) => {
+  const defaults = defaultCalendarMonthRange();
+  const from = query.calendarFrom
+    ? new Date(query.calendarFrom)
+    : defaults.from;
+  const to = query.calendarTo ? new Date(query.calendarTo) : defaults.to;
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    throw new ApiError(400, "calendarFrom and calendarTo must be valid ISO dates.");
+  }
+  if (from > to) {
+    throw new ApiError(400, "calendarFrom must be before or equal to calendarTo.");
+  }
+  const spanMs = to.getTime() - from.getTime();
+  const maxMs = MAX_CALENDAR_RANGE_DAYS * 24 * 60 * 60 * 1000;
+  if (spanMs > maxMs) {
+    throw new ApiError(
+      400,
+      `Calendar range cannot exceed ${MAX_CALENDAR_RANGE_DAYS} days.`,
+    );
+  }
+  return { from, to };
+};
+
+const mapCmHearing = (row) => {
+  const neutral = (row.case?.participants || []).find((p) => p.role === "NEUTRAL");
+  return {
+    id: row.id,
+    caseId: row.caseId,
+    caseNumber: row.case?.caseNumber ?? null,
+    caseTitle: row.case?.title ?? null,
+    title: row.title,
+    hearingDate: row.hearingDate,
+    hearingStatus: row.hearingStatus,
+    format: row.format,
+    neutralName: displayName(neutral?.user),
+  };
+};
+
+const cmUpcomingHearings = async (currentUser, limit) => {
+  const now = new Date();
+  const scope = caseScope(currentUser);
+  const rows = await prisma.hearing.findMany({
+    where: {
+      hearingStatus: { notIn: ["CANCELLED"] },
+      hearingDate: { gte: now },
+      ...(Object.keys(scope).length && { case: scope }),
+    },
+    orderBy: [{ hearingDate: "asc" }, { id: "asc" }],
+    take: limit,
+    select: {
+      id: true,
+      caseId: true,
+      title: true,
+      hearingDate: true,
+      hearingStatus: true,
+      format: true,
+      case: {
+        select: {
+          caseNumber: true,
+          title: true,
+          participants: neutralParticipantSelect,
+        },
+      },
+    },
+  });
+  return rows.map(mapCmHearing);
+};
+
+const cmCalendarHearings = async (currentUser, from, to) => {
+  const scope = caseScope(currentUser);
+  const rows = await prisma.hearing.findMany({
+    where: {
+      hearingStatus: { notIn: ["CANCELLED"] },
+      hearingDate: { gte: from, lte: to },
+      ...(Object.keys(scope).length && { case: scope }),
+    },
+    orderBy: [{ hearingDate: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      caseId: true,
+      title: true,
+      hearingDate: true,
+      hearingStatus: true,
+      format: true,
+      case: {
+        select: {
+          caseNumber: true,
+          title: true,
+          participants: neutralParticipantSelect,
+        },
+      },
+    },
+  });
+  return rows.map(mapCmHearing);
+};
+
+const cmFollowUps = async (currentUser, from, to, limit) => {
+  const scope = caseScope(currentUser);
+  const rows = await prisma.case.findMany({
+    where: {
+      followUpDate: { gte: from, lte: to },
+      ...(Object.keys(scope).length ? scope : {}),
+    },
+    orderBy: [{ followUpDate: "asc" }, { id: "asc" }],
+    take: limit,
+    select: {
+      id: true,
+      caseNumber: true,
+      title: true,
+      followUpDate: true,
+      nextStep: true,
+    },
+  });
+  const now = new Date();
+  return rows.map((row) => ({
+    id: row.id,
+    caseNumber: row.caseNumber,
+    title: row.title,
+    followUpDate: row.followUpDate,
+    nextStep: row.nextStep,
+    dueLabel: followUpDueLabel(row.followUpDate, now),
+  }));
+};
+
+const cmOutstandingDocuSign = async (currentUser, limit) => {
+  const scope = caseScope(currentUser);
+  const rows = await prisma.docuSignEnvelope.findMany({
+    where: {
+      status: { notIn: ["COMPLETED", "DECLINED", "EXPIRED"] },
+      ...(Object.keys(scope).length && { case: scope }),
+    },
+    orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
+    take: limit,
+    select: {
+      id: true,
+      caseId: true,
+      status: true,
+      templateName: true,
+      dueDate: true,
+      sentAt: true,
+      sourceDocument: { select: { name: true } },
+      recipients: {
+        where: { status: { in: ["SENT", "DELIVERED"] } },
+        orderBy: [{ routingOrder: "asc" }],
+        take: 1,
+        select: { name: true, email: true, status: true },
+      },
+      case: {
+        select: {
+          caseNumber: true,
+          title: true,
+          participants: neutralParticipantSelect,
+        },
+      },
+    },
+  });
+
+  return rows.map((row) => {
+    const recipient = row.recipients?.[0];
+    const recipientSummary =
+      recipient?.name?.trim() || recipient?.email || null;
+    const neutral = (row.case?.participants || []).find(
+      (p) => p.role === "NEUTRAL",
+    );
+    return {
+      id: row.id,
+      caseId: row.caseId,
+      caseNumber: row.case?.caseNumber ?? null,
+      caseTitle: row.case?.title ?? null,
+      documentName: row.sourceDocument?.name || row.templateName || null,
+      recipientSummary,
+      sentAt: row.sentAt,
+      dueDate: row.dueDate,
+      status: row.status,
+      neutralName: displayName(neutral?.user),
+    };
+  });
+};
+
+const cmOverdueInvoices = async (currentUser, limit) => {
+  const scope = caseScope(currentUser);
+  const now = new Date();
+  const rows = await prisma.invoice.findMany({
+    where: {
+      OR: [
+        { invoiceStatus: "OVERDUE" },
+        {
+          dueDate: { lt: now },
+          paymentStatus: { not: "PAID" },
+          invoiceStatus: { notIn: ["DRAFT", "VOID"] },
+        },
+      ],
+      ...(Object.keys(scope).length && { case: scope }),
+    },
+    orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
+    take: limit,
+    select: {
+      id: true,
+      caseId: true,
+      invoiceNumber: true,
+      dueDate: true,
+      amountDue: true,
+      invoiceStatus: true,
+      paymentStatus: true,
+      payerCaseParty: {
+        select: {
+          organizationName: true,
+          firstName: true,
+          lastName: true,
+        },
+      },
+      case: {
+        select: {
+          caseNumber: true,
+          title: true,
+          participants: neutralParticipantSelect,
+        },
+      },
+    },
+  });
+
+  return rows.map((row) => {
+    const neutral = (row.case?.participants || []).find(
+      (p) => p.role === "NEUTRAL",
+    );
+    return {
+      id: row.id,
+      caseId: row.caseId,
+      caseNumber: row.case?.caseNumber ?? null,
+      caseTitle: row.case?.title ?? null,
+      invoiceNumber: row.invoiceNumber,
+      clientName: partyDisplayName(row.payerCaseParty),
+      neutralName: displayName(neutral?.user),
+      amountDue: row.amountDue,
+      dueDate: row.dueDate,
+      invoiceStatus: row.invoiceStatus,
+      paymentStatus: row.paymentStatus,
+    };
+  });
+};
+
+const getCaseManagerDashboard = async (query, currentUser) => {
+  if (!CM_DASHBOARD_ROLES.has(currentUser?.role?.name)) {
+    throw new ApiError(
+      403,
+      "Case manager dashboard is only available to CASE_MANAGER, SUPER_ADMIN, and ADMIN_LEADERSHIP users.",
+    );
+  }
+
+  const hearingsLimit =
+    Number(query.hearingsLimit) || DEFAULT_CM_HEARINGS_LIMIT;
+  const followUpsLimit =
+    Number(query.followUpsLimit) || DEFAULT_CM_FOLLOW_UPS_LIMIT;
+  const docuSignLimit =
+    Number(query.docuSignLimit) || DEFAULT_CM_DOCUSIGN_LIMIT;
+  const invoicesLimit =
+    Number(query.invoicesLimit) || DEFAULT_CM_INVOICES_LIMIT;
+
+  const followUpDays = Number(query.followUpDays) || DEFAULT_FOLLOW_UP_DAYS;
+  const followFrom = query.followUpFrom
+    ? new Date(query.followUpFrom)
+    : new Date();
+  const followTo = query.followUpTo
+    ? new Date(query.followUpTo)
+    : new Date(Date.now() + followUpDays * 24 * 60 * 60 * 1000);
+
+  const { from: calendarFrom, to: calendarTo } = resolveCalendarRange(query);
+
+  const [
+    upcomingHearingsList,
+    calendarHearings,
+    followUpsList,
+    outstandingDocuSignList,
+    overdueInvoicesList,
+  ] = await Promise.all([
+    cmUpcomingHearings(currentUser, hearingsLimit),
+    cmCalendarHearings(currentUser, calendarFrom, calendarTo),
+    cmFollowUps(currentUser, followFrom, followTo, followUpsLimit),
+    cmOutstandingDocuSign(currentUser, docuSignLimit),
+    cmOverdueInvoices(currentUser, invoicesLimit),
+  ]);
+
+  return {
+    upcomingHearings: upcomingHearingsList,
+    calendarHearings,
+    followUps: followUpsList,
+    outstandingDocuSign: outstandingDocuSignList,
+    overdueInvoices: overdueInvoicesList,
+  };
+};
+
+module.exports = { getOverview, getLawyerDashboard, getCaseManagerDashboard };

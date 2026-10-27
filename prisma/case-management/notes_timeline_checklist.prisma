@@ -11,10 +11,20 @@ model CaseNote {
   visibility CaseNoteVisibility @default(INTERNAL_ONLY)
   body       String             @db.Text
 
+  relatedRecordType String?
+  relatedRecordId   String?
+
+  parentNoteId String?
+  parentNote   CaseNote?  @relation("CaseNoteReplies", fields: [parentNoteId], references: [id], onDelete: Cascade)
+  replies      CaseNote[] @relation("CaseNoteReplies")
+
   createdAt DateTime @default(now()) @db.Timestamp(3)
   updatedAt DateTime @updatedAt @db.Timestamp(3)
 
   @@index([caseId, createdAt])
+  @@index([caseId, noteType, createdAt])
+  @@index([parentNoteId])
+  @@index([relatedRecordType, relatedRecordId])
   @@map("case_notes")
 }
 

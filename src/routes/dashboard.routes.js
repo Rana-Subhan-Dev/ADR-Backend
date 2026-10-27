@@ -14,6 +14,7 @@ const { RoleName } = require("../constants/auth.constants");
 const {
   overviewQuerySchema,
   lawyerDashboardQuerySchema,
+  caseManagerDashboardQuerySchema,
 } = require("../validations/dashboard.validation");
 
 const router = express.Router();
@@ -33,6 +34,18 @@ router.get(
   requireInternalRole(RoleName.LAWYER),
   validate(lawyerDashboardQuerySchema, "query"),
   dashboardController.getLawyerDashboard,
+);
+
+router.get(
+  "/case-manager",
+  requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
+  requireInternalRole(
+    RoleName.CASE_MANAGER,
+    RoleName.SUPER_ADMIN,
+    RoleName.ADMIN_LEADERSHIP,
+  ),
+  validate(caseManagerDashboardQuerySchema, "query"),
+  dashboardController.getCaseManagerDashboard,
 );
 
 module.exports = router;

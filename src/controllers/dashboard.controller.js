@@ -26,4 +26,20 @@ const getLawyerDashboard = asyncHandler(async (req, res) =>
     ),
 );
 
-module.exports = { getOverview, getLawyerDashboard };
+const getCaseManagerDashboard = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await dashboardService.getCaseManagerDashboard(req.query, req.user),
+        "Case manager dashboard fetched successfully.",
+      ),
+    ),
+);
+
+module.exports = {
+  getOverview,
+  getLawyerDashboard,
+  getCaseManagerDashboard,
+};

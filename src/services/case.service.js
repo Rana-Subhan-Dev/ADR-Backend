@@ -85,15 +85,172 @@ const mapDepositStatus = (invoices, billingConfiguration) => {
   }
 };
 
-const pickNextHearingDate = (hearings = []) => {
+const HEARING_TYPE_LABELS = {
+  MEDIATION_SESSION: "Mediation Session",
+  ARBITRATION_HEARING: "Arbitration Hearing",
+  STATUS_CONFERENCE: "Status Conference",
+  CUSTOM: "Custom",
+};
+
+const RECENT_DOCUMENT_DAYS = 30;
+
+const pickNextHearing = (hearings = []) => {
   const now = Date.now();
   const withDates = hearings
     .filter((h) => h.hearingDate)
     .map((h) => ({ ...h, ts: new Date(h.hearingDate).getTime() }))
     .sort((a, b) => a.ts - b.ts);
 
-  const upcoming = withDates.find((h) => h.ts >= now);
-  return (upcoming || withDates[withDates.length - 1] || null)?.hearingDate || null;
+  return withDates.find((h) => h.ts >= now) || withDates[withDates.length - 1] || null;
+};
+
+const pickNextHearingDate = (hearings = []) =>
+  pickNextHearing(hearings)?.hearingDate || null;
+
+const mapNextHearing = (hearings = []) => {
+  const hearing = pickNextHearing(hearings);
+  if (!hearing) return null;
+  return {
+    id: hearing.id,
+    hearingDate: hearing.hearingDate,
+    title: hearing.title || null,
+    type: hearing.type || null,
+    hearingTypeLabel: hearing.type
+      ? HEARING_TYPE_LABELS[hearing.type] || hearing.type
+      : null,
+    format: hearing.format || null,
+    location: hearing.location || null,
+    hearingStatus: hearing.hearingStatus || null,
+  };
+};
+
+const roundMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
+
+const invoiceOpenBalance = (invoice) => {
+  const amountDue = Number(invoice.amountDue || 0);
+  const paid = (invoice.payments || []).reduce(
+    (sum, p) => sum + Number(p.amount || 0),
+    0,
+  );
+  const credited = (invoice.creditNotes || []).reduce(
+    (sum, c) => sum + Number(c.amount || 0),
+    0,
+  );
+  return roundMoney(Math.max(0, amountDue - paid - credited));
+};
+
+const buildCaseOverviewSummary = async (caseId) => {
+  const recentSince = new Date(
+    Date.now() - RECENT_DOCUMENT_DAYS * 24 * 60 * 60 * 1000,
+  );
+
+  const [
+    totalParties,
+    attorneyRows,
+    totalParticipants,
+    pendingInvitations,
+    totalDocuments,
+    recentlyAdded,
+    pendingReview,
+    missingDocuments,
+    invoices,
+  ] = await Promise.all([
+    prisma.caseParty.count({ where: { caseId } }),
+    prisma.partyAttorneyRepresentation.findMany({
+      where: { caseParty: { caseId } },
+      select: { attorneyId: true },
+      distinct: ["attorneyId"],
+    }),
+    prisma.caseParticipant.count({
+      where: { caseId, accessStatus: "ACTIVE" },
+    }),
+    prisma.caseParticipant.count({
+      where: { caseId, invitationStatus: "INVITED" },
+    }),
+    prisma.document.count({ where: { caseId, deletedAt: null } }),
+    prisma.document.count({
+      where: { caseId, deletedAt: null, createdAt: { gte: recentSince } },
+    }),
+    prisma.document.count({
+      where: {
+        caseId,
+        deletedAt: null,
+        reviewStatus: "PENDING_REVIEW",
+      },
+    }),
+    prisma.documentSubmissionRequest.count({
+      where: {
+        caseId,
+        OR: [
+          { status: { in: ["NOT_STARTED", "IN_PROGRESS", "OVERDUE"] } },
+          { fulfillingDocumentId: null, status: { not: "COMPLETED" } },
+        ],
+      },
+    }),
+    prisma.invoice.findMany({
+      where: {
+        caseId,
+        invoiceStatus: { notIn: ["DRAFT", "VOID"] },
+      },
+      select: {
+        invoiceType: true,
+        invoiceStatus: true,
+        paymentStatus: true,
+        amountDue: true,
+        payments: { select: { amount: true } },
+        creditNotes: { select: { amount: true } },
+      },
+    }),
+  ]);
+
+  let outstandingBalance = 0;
+  let unpaidCount = 0;
+  let depositPaymentsReceived = 0;
+  let hasDepositInvoice = false;
+
+  for (const invoice of invoices) {
+    const open = invoiceOpenBalance(invoice);
+    if (
+      open > 0 &&
+      ["UNPAID", "PARTIAL"].includes(invoice.paymentStatus)
+    ) {
+      outstandingBalance = roundMoney(outstandingBalance + open);
+      unpaidCount += 1;
+    }
+    if (invoice.invoiceType === "DEPOSIT") {
+      hasDepositInvoice = true;
+      const paid = (invoice.payments || []).reduce(
+        (sum, p) => sum + Number(p.amount || 0),
+        0,
+      );
+      depositPaymentsReceived = roundMoney(depositPaymentsReceived + paid);
+    }
+  }
+
+  return {
+    participants: {
+      totalParties,
+      totalAttorneys: attorneyRows.length,
+      totalParticipants,
+      pendingInvitations,
+    },
+    billing: {
+      // Payments received on DEPOSIT invoices until a trust ledger exists.
+      depositBalance: hasDepositInvoice ? depositPaymentsReceived : null,
+      outstandingBalance,
+      unpaidInvoices: {
+        count: unpaidCount,
+        amount: outstandingBalance,
+      },
+    },
+    documents: {
+      totalDocuments,
+      recentlyAdded,
+      pendingReview,
+      missingDocuments,
+      recentlyAddedWindowDays: RECENT_DOCUMENT_DAYS,
+    },
+  };
 };
 
 const mapCase = (caseRecord) => {
@@ -134,7 +291,8 @@ const mapCase = (caseRecord) => {
   ];
 
   const caseStatus = mapLifecycleToCaseStatus(rest.lifecycleStatus, inquiry);
-  const hearingDate = pickNextHearingDate(hearings);
+  const nextHearing = mapNextHearing(hearings);
+  const hearingDate = nextHearing?.hearingDate || null;
 
   return {
     ...rest,
@@ -152,12 +310,11 @@ const mapCase = (caseRecord) => {
     type: rest.caseType,
     matterName: inquiry?.matterName || rest.title,
     inquiryDate: inquiry?.inquiryDate || null,
+    disputeType: rest.disputeCategory?.name || null,
     caseStatus,
     status: rest.lifecycleStatus,
     hearingDate,
-    nextHearing: hearingDate
-      ? { hearingDate, id: hearings.find((h) => h.hearingDate === hearingDate)?.id }
-      : null,
+    nextHearing,
     estRevenue: formatMoney(milestone1?.estimatedAmount),
     revenueDate: milestone1?.revenueDate || null,
     revenueStatus: mapRevenueStatus(milestone1?.status),
@@ -411,7 +568,11 @@ const getCaseById = async (id, currentUser) => {
 
   await assertCaseAccess(caseData, currentUser);
 
-  return caseData;
+  const overview = await buildCaseOverviewSummary(id);
+  return {
+    ...caseData,
+    overview,
+  };
 };
 
 const getCases = async (query, currentUser) => {

@@ -83,10 +83,28 @@ const deleteCaseNote = asyncHandler(async (req, res) =>
     ),
 );
 
+const replyToCaseNote = asyncHandler(async (req, res) =>
+  res
+    .status(201)
+    .json(
+      new ApiResponse(
+        201,
+        await caseNoteService.replyToCaseNote(
+          req.params.caseId,
+          req.params.noteId,
+          req.body,
+          req.user,
+        ),
+        "Reply sent successfully.",
+      ),
+    ),
+);
+
 module.exports = {
   createCaseNote,
   getCaseNotes,
   getCaseNote,
   updateCaseNote,
   deleteCaseNote,
+  replyToCaseNote,
 };

@@ -75,6 +75,9 @@ const CASE_SELECT = {
       hearingDate: true,
       hearingStatus: true,
       title: true,
+      type: true,
+      format: true,
+      location: true,
     },
   },
 
