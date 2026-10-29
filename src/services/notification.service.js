@@ -144,7 +144,8 @@ const createInAppNotification = async (
       deliveryStatus: "SENT",
       sentAt: new Date(),
     },
-    tx,
+    // null must not override the repository default (prisma client)
+    tx || undefined,
   );
 };
 

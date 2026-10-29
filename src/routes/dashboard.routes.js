@@ -15,6 +15,7 @@ const {
   overviewQuerySchema,
   lawyerDashboardQuerySchema,
   caseManagerDashboardQuerySchema,
+  clientDashboardQuerySchema,
 } = require("../validations/dashboard.validation");
 
 const router = express.Router();
@@ -46,6 +47,14 @@ router.get(
   ),
   validate(caseManagerDashboardQuerySchema, "query"),
   dashboardController.getCaseManagerDashboard,
+);
+
+router.get(
+  "/client",
+  requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
+  requireInternalRole(RoleName.CLIENT),
+  validate(clientDashboardQuerySchema, "query"),
+  dashboardController.getClientDashboard,
 );
 
 module.exports = router;

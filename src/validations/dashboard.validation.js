@@ -26,8 +26,17 @@ const caseManagerDashboardQuerySchema = Joi.object({
   calendarTo: Joi.date().iso().optional(),
 });
 
+const clientDashboardQuerySchema = Joi.object({
+  hearingsLimit: Joi.number().integer().min(1).max(50).optional(),
+  signaturesLimit: Joi.number().integer().min(1).max(50).optional(),
+  invoicesLimit: Joi.number().integer().min(1).max(50).optional(),
+  documentsLimit: Joi.number().integer().min(1).max(50).optional(),
+  casesLimit: Joi.number().integer().min(1).max(50).optional(),
+});
+
 module.exports = {
   overviewQuerySchema,
   lawyerDashboardQuerySchema,
   caseManagerDashboardQuerySchema,
+  clientDashboardQuerySchema,
 };

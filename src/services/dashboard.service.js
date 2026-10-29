@@ -249,6 +249,7 @@ const lawyerUpcomingHearings = async (currentUser, limit) => {
       zoomStatus: row.zoomStatus ?? null,
       neutralName: displayName(neutral?.user),
       caseManagerName: displayName(caseManager?.user),
+      caseManagerEmail: caseManager?.user?.email || null,
     };
   });
 };
@@ -768,4 +769,128 @@ const getCaseManagerDashboard = async (query, currentUser) => {
   };
 };
 
-module.exports = { getOverview, getLawyerDashboard, getCaseManagerDashboard };
+const DEFAULT_CLIENT_CASES_LIMIT = 10;
+
+const partyNameFromRecord = (party) => {
+  if (!party) return null;
+  if (party.organizationName?.trim()) return party.organizationName.trim();
+  const name = [party.firstName, party.lastName].filter(Boolean).join(" ").trim();
+  return name || null;
+};
+
+const clientMyCases = async (currentUser, limit) => {
+  const scope = caseScope(currentUser);
+  const now = new Date();
+  const rows = await prisma.case.findMany({
+    where: Object.keys(scope).length ? scope : {},
+    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+    take: limit,
+    select: {
+      id: true,
+      caseNumber: true,
+      title: true,
+      caseType: true,
+      lifecycleStatus: true,
+      participants: {
+        where: {
+          OR: [
+            {
+              accessStatus: "ACTIVE",
+              role: { in: ["CASE_MANAGER", "NEUTRAL"] },
+            },
+            { userId: currentUser.id, role: "CLIENT" },
+          ],
+        },
+        select: {
+          role: true,
+          userId: true,
+          user: {
+            select: { firstName: true, lastName: true, email: true },
+          },
+          caseParty: {
+            select: {
+              organizationName: true,
+              firstName: true,
+              lastName: true,
+            },
+          },
+        },
+      },
+      hearings: {
+        where: {
+          hearingStatus: { notIn: ["CANCELLED"] },
+          hearingDate: { gte: now },
+        },
+        orderBy: [{ hearingDate: "asc" }],
+        take: 1,
+        select: { hearingDate: true },
+      },
+    },
+  });
+
+  return rows.map((row) => {
+    const participants = row.participants || [];
+    const caseManager = participants.find((p) => p.role === "CASE_MANAGER");
+    const neutral = participants.find((p) => p.role === "NEUTRAL");
+    const clientParticipant = participants.find(
+      (p) => p.role === "CLIENT" && p.userId === currentUser.id,
+    );
+    return {
+      id: row.id,
+      caseNumber: row.caseNumber,
+      title: row.title,
+      caseType: row.caseType,
+      lifecycleStatus: row.lifecycleStatus,
+      caseManagerName: displayName(caseManager?.user),
+      neutralName: displayName(neutral?.user),
+      partyName: partyNameFromRecord(clientParticipant?.caseParty),
+      nextHearingDate: row.hearings?.[0]?.hearingDate || null,
+    };
+  });
+};
+
+const getClientDashboard = async (query, currentUser) => {
+  if (currentUser?.role?.name !== RoleName.CLIENT) {
+    throw new ApiError(403, "Client dashboard is only available to CLIENT users.");
+  }
+
+  const hearingsLimit =
+    Number(query.hearingsLimit) || DEFAULT_LAWYER_SECTION_LIMIT;
+  const signaturesLimit =
+    Number(query.signaturesLimit) || DEFAULT_LAWYER_SECTION_LIMIT;
+  const invoicesLimit =
+    Number(query.invoicesLimit) || DEFAULT_LAWYER_SECTION_LIMIT;
+  const documentsLimit =
+    Number(query.documentsLimit) || DEFAULT_LAWYER_SECTION_LIMIT;
+  const casesLimit = Number(query.casesLimit) || DEFAULT_CLIENT_CASES_LIMIT;
+
+  const [
+    upcomingHearingsList,
+    pendingSignatures,
+    invoicesDue,
+    recentDocuments,
+    myCases,
+  ] = await Promise.all([
+    lawyerUpcomingHearings(currentUser, hearingsLimit),
+    lawyerPendingSignatures(currentUser, signaturesLimit),
+    lawyerInvoicesDue(currentUser, invoicesLimit),
+    lawyerRecentDocuments(currentUser, documentsLimit),
+    clientMyCases(currentUser, casesLimit),
+  ]);
+
+  return {
+    upcomingHearings: upcomingHearingsList,
+    pendingSignatures,
+    invoicesDue,
+    invoicePaymentStatus: invoicesDue[0] || null,
+    recentDocuments,
+    myCases,
+  };
+};
+
+module.exports = {
+  getOverview,
+  getLawyerDashboard,
+  getCaseManagerDashboard,
+  getClientDashboard,
+};
