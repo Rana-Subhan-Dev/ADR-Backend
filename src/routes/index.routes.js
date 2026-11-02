@@ -21,6 +21,7 @@ const timesheetRoutes = require("./timesheet.routes");
 const docusignRoutes = require("./docusign.routes");
 const billingRoutes = require("./billing.routes");
 const adminRoutes = require("./admin.routes");
+const accountingRoutes = require("./accounting.routes");
 const express = require("express");
 const router = express.Router();
 
@@ -32,6 +33,10 @@ const defaultRoutes = [
   {
     path: "/admin",
     route: adminRoutes,
+  },
+  {
+    path: "/accounting",
+    route: accountingRoutes,
   },
   {
     path: "/users",

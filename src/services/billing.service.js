@@ -3831,4 +3831,10 @@ module.exports = {
   getQuickBooksSyncLogs,
   retryQuickBooksSync,
   generateNeutralPaymentStatement,
+  // Shared read helpers for accounting / other portals
+  computeInvoiceBalances,
+  isBillingConfigComplete,
+  roundMoney,
+  partyDisplayName,
+  userDisplayName,
 };
