@@ -1,4 +1,5 @@
 const accountingCaseFinancialsService = require("../services/accountingCaseFinancials.service");
+const accountingTimesheetsService = require("../services/accountingTimesheets.service");
 const ApiResponse = require("../utils/apiResponse");
 const asyncHandler = require("../utils/asyncHandler");
 
@@ -33,8 +34,15 @@ const contactCaseManager = respond(
     ),
 );
 
+const listTimesheets = respond(
+  200,
+  "Timesheets fetched successfully.",
+  (req) => accountingTimesheetsService.listTimesheets(req.query),
+);
+
 module.exports = {
   listCaseFinancials,
   getCaseFinancials,
   contactCaseManager,
+  listTimesheets,
 };

@@ -9,8 +9,17 @@ const {
 const ApiError = require("../utils/apiError");
 
 const managerRoles = ["SUPER_ADMIN", "ADMIN_LEADERSHIP", "CASE_MANAGER"];
+const accountingRoles = ["ACCOUNTING_STAFF"];
 
 const isManager = (user) => managerRoles.includes(user.role?.name);
+const isAccountingStaff = (user) =>
+  accountingRoles.includes(user.role?.name);
+
+const ACCOUNTING_UPLOAD_VISIBILITIES = new Set([
+  "INTERNAL_ONLY",
+  "ACCOUNTING_FINANCE",
+  "ALL_AUTHORIZED_PARTICIPANTS",
+]);
 
 const markS3Files = (files, state) => {
   files.filter(Boolean).forEach((file) => {
@@ -24,12 +33,20 @@ const cleanupS3Files = async (files) => {
 };
 
 const assertCanSetVisibility = (visibility, currentUser) => {
-  if (!isManager(currentUser) && visibility !== "ALL_AUTHORIZED_PARTICIPANTS") {
-    throw new ApiError(
-      403,
-      "External users may only upload documents for authorized case participants.",
-    );
+  if (isManager(currentUser)) return;
+  if (
+    isAccountingStaff(currentUser) &&
+    ACCOUNTING_UPLOAD_VISIBILITIES.has(visibility)
+  ) {
+    return;
   }
+  if (visibility === "ALL_AUTHORIZED_PARTICIPANTS") return;
+  throw new ApiError(
+    403,
+    isAccountingStaff(currentUser)
+      ? "Accounting staff may upload with INTERNAL_ONLY, ACCOUNTING_FINANCE, or ALL_AUTHORIZED_PARTICIPANTS visibility."
+      : "External users may only upload documents for authorized case participants.",
+  );
 };
 
 const assertRecipients = async (

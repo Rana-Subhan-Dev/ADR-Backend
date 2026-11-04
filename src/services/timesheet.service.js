@@ -4,6 +4,10 @@ const timesheetRepository = require("../repositories/timesheet.repository");
 const caseService = require("./case.service");
 const ApiError = require("../utils/apiError");
 const { BillingExpensesPolicy } = require("@prisma/client");
+const {
+  decorateTimesheetDisplay,
+  sumExpenses,
+} = require("../utils/timesheetDisplay");
 
 const managerRoles = ["SUPER_ADMIN", "ADMIN_LEADERSHIP", "CASE_MANAGER"];
 const isManager = (user) => managerRoles.includes(user.role?.name);
@@ -30,18 +34,7 @@ const paginate = (timesheets, total, page, limit) => ({
   },
 });
 
-const sumExpenses = (expenses = []) =>
-  expenses.reduce((sum, row) => sum + Number(row.amount || 0), 0);
-
-const decorateTimesheet = (timesheet) => {
-  if (!timesheet) return timesheet;
-  const expenses = timesheet.expenses || [];
-  return {
-    ...timesheet,
-    expensesTotal: sumExpenses(expenses),
-    expenseCount: expenses.length,
-  };
-};
+const decorateTimesheet = (timesheet) => decorateTimesheetDisplay(timesheet);
 
 const assertNeutral = async (caseId, userId, tx = prisma) => {
   const participant = await tx.caseParticipant.findFirst({
@@ -237,7 +230,11 @@ const writeReviewHistory = (tx, timesheetId, action, actorUserId, comment) =>
 const assertDraftEditable = (timesheet, currentUser) => {
   if (timesheet.status !== "DRAFT")
     throw new ApiError(400, "Only draft timesheet entries can be updated.");
-  if (!isManager(currentUser) && timesheet.neutralUserId !== currentUser.id)
+  // Managers + Accounting Staff may edit drafts (expenses/receipts); Neutrals only own rows.
+  if (
+    !canAccessFinance(currentUser) &&
+    timesheet.neutralUserId !== currentUser.id
+  )
     throw new ApiError(
       403,
       "You do not have permission to update this timesheet entry.",

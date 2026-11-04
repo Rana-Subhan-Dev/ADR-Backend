@@ -6,6 +6,7 @@ const validate = require("../middlewares/validate.middleware");
 const { RoleName } = require("../constants/auth.constants");
 const {
   caseFinancialsListQuerySchema,
+  timesheetsListQuerySchema,
   caseIdParamSchema,
   contactCaseManagerSchema,
 } = require("../validations/accounting.validation");
@@ -32,6 +33,12 @@ router.post(
   validate(caseIdParamSchema, "params"),
   validate(contactCaseManagerSchema),
   accountingController.contactCaseManager,
+);
+
+router.get(
+  "/timesheets",
+  validate(timesheetsListQuerySchema, "query"),
+  accountingController.listTimesheets,
 );
 
 module.exports = router;

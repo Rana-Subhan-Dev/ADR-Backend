@@ -75,6 +75,8 @@ const select = {
       caseNumber: true,
       title: true,
       caseType: true,
+      caseTypeLabel: true,
+      inquiry: { select: { matterName: true } },
     },
   },
   expenses: {
@@ -124,6 +126,8 @@ const listSelect = {
       caseNumber: true,
       title: true,
       caseType: true,
+      caseTypeLabel: true,
+      inquiry: { select: { matterName: true } },
     },
   },
   expenses: {

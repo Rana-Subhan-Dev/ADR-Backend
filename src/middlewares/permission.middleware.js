@@ -1,22 +1,38 @@
 const ApiError = require("../utils/apiError");
 const { RoleName } = require("../constants/auth.constants");
 
-const requirePermission = (module, action) => (req, res, next) => {
-  if (req.user?.role?.name === RoleName.SUPER_ADMIN) return next();
-
-  const granted = req.user?.role?.rolePermissions?.some(
-    ({ permission }) =>
-      permission.module === module && permission.action === action,
+const hasPermission = (user, module, action) => {
+  if (user?.role?.name === RoleName.SUPER_ADMIN) return true;
+  return Boolean(
+    user?.role?.rolePermissions?.some(
+      ({ permission }) =>
+        permission.module === module && permission.action === action,
+    ),
   );
-
-  if (!granted) {
-    return next(
-      new ApiError(403, "You do not have permission to perform this action."),
-    );
-  }
-
-  next();
 };
+
+const requirePermission = (module, action) => (req, res, next) => {
+  if (hasPermission(req.user, module, action)) return next();
+  return next(
+    new ApiError(403, "You do not have permission to perform this action."),
+  );
+};
+
+/** Pass if the user has any of the listed module/action pairs. */
+const requireAnyPermission =
+  (...pairs) =>
+  (req, res, next) => {
+    if (req.user?.role?.name === RoleName.SUPER_ADMIN) return next();
+    const granted = pairs.some(([module, action]) =>
+      hasPermission(req.user, module, action),
+    );
+    if (!granted) {
+      return next(
+        new ApiError(403, "You do not have permission to perform this action."),
+      );
+    }
+    return next();
+  };
 
 const requireInternalRole =
   (...roles) =>
@@ -39,7 +55,9 @@ const requireSelfOrPermission =
   };
 
 module.exports = {
+  hasPermission,
   requirePermission,
+  requireAnyPermission,
   requireInternalRole,
   requireSelfOrPermission,
 };

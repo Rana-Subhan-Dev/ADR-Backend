@@ -7,13 +7,15 @@ const reportIdSchema = Joi.object({
 
 const reportCatalogueQuerySchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
-  limit: Joi.number().integer().min(1).max(100).default(100),
+  limit: Joi.number().integer().min(1).max(100).default(10),
   search: Joi.string().trim().max(255).allow("").optional(),
-  category: Joi.string().trim().max(100).allow("").optional(),
+  category: Joi.string().trim().max(120).allow("").optional(),
   dataset: Joi.string().trim().max(100).allow("").optional(),
   reportType: Joi.string().trim().max(100).allow("").optional(),
   dateFrom: Joi.date().iso().allow("").optional(),
   dateTo: Joi.date().iso().allow("").optional(),
+  dateRange: Joi.string().valid("7", "30", "90", 7, 30, 90).optional(),
+  supports: Joi.string().trim().max(500).allow("").optional(),
 });
 
 const reportQuerySchema = Joi.object({
@@ -24,6 +26,8 @@ const reportQuerySchema = Joi.object({
   dateTo: Joi.date().iso().allow("").optional(),
   fromDate: Joi.date().iso().allow("").optional(),
   toDate: Joi.date().iso().allow("").optional(),
+  dateRange: Joi.string().valid("7", "30", "90", 7, 30, 90).optional(),
+  format: Joi.string().valid("csv", "json", "").optional(),
   caseType: Joi.string()
     .trim()
     .uppercase()

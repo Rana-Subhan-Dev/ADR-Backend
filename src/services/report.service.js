@@ -3,11 +3,17 @@ const ApiError = require("../utils/apiError");
 const {
   REPORT_DEFINITIONS,
   getReportDefinition,
+  filterKeys,
+  normalizeSupportsKey,
+  normalizeCategoryQuery,
+  normalizeReportTypeQuery,
 } = require("../constants/reports.constants");
 const { accessibleCaseWhere } = require("../utils/caseAccess");
 const caseRepository = require("../repositories/case.repository");
 const { mapCase } = require("./case.service");
 const hearingRepository = require("../repositories/hearing.repository");
+
+const CSV_EXPORT_MAX_ROWS = 10000;
 
 const paginationMeta = (page, limit, total) => {
   const totalPages = Math.ceil(total / limit) || 1;
@@ -15,6 +21,7 @@ const paginationMeta = (page, limit, total) => {
     page,
     limit,
     total,
+    totalItems: total,
     totalPages,
     hasNextPage: page < totalPages,
     hasPreviousPage: page > 1,
@@ -35,6 +42,20 @@ const parseDateBound = (value, endOfDay = false) => {
     date.setUTCHours(23, 59, 59, 999);
   }
   return date;
+};
+
+const applyDateRangePreset = (query = {}) => {
+  if (!query.dateRange || query.dateFrom || query.dateTo) return query;
+  const days = Number(query.dateRange);
+  if (![7, 30, 90].includes(days)) return query;
+  const dateTo = new Date();
+  const dateFrom = new Date();
+  dateFrom.setUTCDate(dateFrom.getUTCDate() - days);
+  return {
+    ...query,
+    dateFrom: dateFrom.toISOString(),
+    dateTo: dateTo.toISOString(),
+  };
 };
 
 const agingBucketFromDueDate = (dueDate, now = new Date()) => {
@@ -70,7 +91,11 @@ const agingDueDateRange = (bucket, now = new Date()) => {
   return ranges[bucket] || null;
 };
 
-const buildCaseReportFilters = (currentUser, query) => {
+const buildCaseReportFilters = (
+  currentUser,
+  query,
+  { dateField = "createdAt" } = {},
+) => {
   const accessWhere = accessibleCaseWhere(currentUser);
   const filters = Object.keys(accessWhere).length ? [accessWhere] : [];
 
@@ -128,12 +153,37 @@ const buildCaseReportFilters = (currentUser, query) => {
   const dateFrom = parseDateBound(query.dateFrom || query.fromDate);
   const dateTo = parseDateBound(query.dateTo || query.toDate, true);
   if (dateFrom || dateTo) {
-    filters.push({
-      createdAt: {
-        ...(dateFrom && { gte: dateFrom }),
-        ...(dateTo && { lte: dateTo }),
-      },
-    });
+    if (dateField === "lastContact") {
+      // Prefer lastContactDate; fall back to updatedAt when never contacted.
+      filters.push({
+        OR: [
+          {
+            lastContactDate: {
+              ...(dateFrom && { gte: dateFrom }),
+              ...(dateTo && { lte: dateTo }),
+            },
+          },
+          {
+            AND: [
+              { lastContactDate: null },
+              {
+                updatedAt: {
+                  ...(dateFrom && { gte: dateFrom }),
+                  ...(dateTo && { lte: dateTo }),
+                },
+              },
+            ],
+          },
+        ],
+      });
+    } else {
+      filters.push({
+        createdAt: {
+          ...(dateFrom && { gte: dateFrom }),
+          ...(dateTo && { lte: dateTo }),
+        },
+      });
+    }
   }
 
   return filters.length === 0
@@ -143,47 +193,109 @@ const buildCaseReportFilters = (currentUser, query) => {
       : { AND: filters };
 };
 
-const listReports = (query = {}) => {
-  const page = Number(query.page) || 1;
-  const limit = Math.min(Number(query.limit) || 100, 100);
-  const generatedAt = new Date();
-  let reports = REPORT_DEFINITIONS.map((report) => ({
+const enrichCatalogueItem = (report, generatedAt) => {
+  const keys = filterKeys(report);
+  return {
     ...report,
+    id: report.id,
+    reportName: report.reportName || report.name,
+    name: report.name,
+    category: report.category,
+    categoryLabel: report.categoryLabel || report.category,
+    reportType: report.reportType,
+    reportTypeLabel: report.reportTypeLabel || report.reportType,
+    description: report.description,
+    keyFields: report.keyFields || [],
+    keyDataFields: report.keyDataFields || report.keyFields || [],
+    availableFilters: (report.filters || []).map((entry) =>
+      typeof entry === "string" ? entry : entry.label || entry.key,
+    ),
+    filters: report.filters,
+    filterKeys: keys,
+    permission: report.permission || "ALL_USERS",
+    permissionLabel: report.permissionLabel || report.permission || "All Users",
+    dataset: report.dataset,
     generated: report.generated || generatedAt.toISOString(),
-  }));
+    lastGeneratedAt: report.generated || generatedAt.toISOString(),
+  };
+};
 
-  if (query.search) {
-    const search = query.search.toLocaleLowerCase();
-    reports = reports.filter((report) =>
-      [report.name, report.description, ...(report.keyFields || [])].some(
-        (value) =>
-          String(value || "")
-            .toLocaleLowerCase()
-            .includes(search),
-      ),
-    );
+const listReports = (query = {}) => {
+  const q = applyDateRangePreset(query);
+  const page = Number(q.page) || 1;
+  const limit = Math.min(Number(q.limit) || 10, 100);
+  const generatedAt = new Date();
+  let reports = REPORT_DEFINITIONS.map((report) =>
+    enrichCatalogueItem(report, generatedAt),
+  );
+
+  if (q.search) {
+    const search = q.search.toLocaleLowerCase();
+    reports = reports.filter((report) => {
+      const filterLabels = (report.filters || []).map((entry) =>
+        typeof entry === "string" ? entry : entry.label || entry.key,
+      );
+      return [
+        report.name,
+        report.reportName,
+        report.category,
+        report.categoryLabel,
+        report.reportType,
+        report.reportTypeLabel,
+        report.description,
+        ...(report.keyFields || []),
+        ...(report.keyDataFields || []),
+        ...filterLabels,
+      ].some((value) =>
+        String(value || "")
+          .toLocaleLowerCase()
+          .includes(search),
+      );
+    });
   }
-  if (query.category) {
-    const category = query.category.toLocaleLowerCase();
+
+  if (q.category) {
+    const wanted = normalizeCategoryQuery(q.category);
     reports = reports.filter(
-      (report) => report.category.toLocaleLowerCase() === category,
+      (report) =>
+        report.category.toLocaleLowerCase() ===
+          String(wanted).toLocaleLowerCase() ||
+        String(report.categoryLabel || "")
+          .toLocaleLowerCase()
+          .includes(String(q.category).toLocaleLowerCase()),
     );
   }
-  if (query.dataset) {
-    const dataset = query.dataset.toLocaleLowerCase();
+  if (q.dataset) {
+    const dataset = q.dataset.toLocaleLowerCase();
     reports = reports.filter(
       (report) => report.dataset.toLocaleLowerCase() === dataset,
     );
   }
-  if (query.reportType) {
-    const reportType = query.reportType.toLocaleLowerCase();
+  if (q.reportType) {
+    const wanted = normalizeReportTypeQuery(q.reportType);
     reports = reports.filter(
-      (report) => report.reportType.toLocaleLowerCase() === reportType,
+      (report) => report.reportType.toLocaleLowerCase() === wanted,
     );
   }
 
-  const dateFrom = parseDateBound(query.dateFrom);
-  const dateTo = parseDateBound(query.dateTo, true);
+  if (q.supports) {
+    const required = String(q.supports)
+      .split(",")
+      .map((part) => normalizeSupportsKey(part))
+      .filter(Boolean);
+    reports = reports.filter((report) => {
+      const keys = new Set(filterKeys(report));
+      // date affinity: dateFrom or dateTo satisfies "date" support
+      if (keys.has("dateFrom") || keys.has("dateTo")) {
+        keys.add("dateFrom");
+        keys.add("dateTo");
+      }
+      return required.every((key) => keys.has(key));
+    });
+  }
+
+  const dateFrom = parseDateBound(q.dateFrom);
+  const dateTo = parseDateBound(q.dateTo, true);
   if (dateFrom || dateTo) {
     reports = reports.filter((report) => {
       const generated = new Date(report.generated);
@@ -197,39 +309,110 @@ const listReports = (query = {}) => {
   const skip = (page - 1) * limit;
   return {
     reports: reports.slice(skip, skip + limit),
+    items: reports.slice(skip, skip + limit),
     pagination: paginationMeta(page, limit, total),
   };
 };
 
 const mapCaseStatusRow = (caseRecord) => {
   const mapped = mapCase(caseRecord);
+  const caseManagerName = userDisplayName(mapped.caseManager);
+  const neutralName = mapped.assignedNeutral;
+  const nextHearing = mapped.hearingDate;
+  const lastContact = mapped.lastContactDate;
+  const followUp = mapped.followUpDate;
+  const caseStatus = mapped.caseStatus?.label || mapped.lifecycleStatus;
   return {
+    id: mapped.id,
+    caseId: mapped.id,
+    caseNumber: mapped.caseNumber,
     caseType: mapped.caseType,
-    caseManager: userDisplayName(mapped.caseManager),
-    status: mapped.caseStatus?.label || mapped.lifecycleStatus,
+    caseManager: caseManagerName,
+    caseManagerName,
+    status: caseStatus,
+    caseStatus,
     lifecycleStatus: mapped.lifecycleStatus,
-    neutral: mapped.assignedNeutral,
+    neutral: neutralName,
+    neutralName,
     matterName: mapped.matterName || mapped.title,
     disputeType: mapped.disputeCategory?.name || null,
-    nextHearing: mapped.hearingDate,
-    lastContact: mapped.lastContactDate,
-    followUp: mapped.followUpDate,
+    nextHearing,
+    nextHearingAt: nextHearing,
+    lastContact,
+    lastContactAt: lastContact,
+    followUp,
+    followUpAt: followUp,
+  };
+};
+
+const buildParticipantFilterOptions = async (currentUser) => {
+  const accessWhere = accessibleCaseWhere(currentUser);
+  const cases = await prisma.case.findMany({
+    where: {
+      isDraft: false,
+      ...(Object.keys(accessWhere).length ? accessWhere : {}),
+    },
+    select: {
+      participants: {
+        where: {
+          accessStatus: "ACTIVE",
+          role: { in: ["CASE_MANAGER", "NEUTRAL"] },
+        },
+        select: {
+          role: true,
+          userId: true,
+          user: {
+            select: { id: true, firstName: true, lastName: true, email: true },
+          },
+        },
+      },
+    },
+  });
+
+  const caseManagers = new Map();
+  const neutrals = new Map();
+  for (const c of cases) {
+    for (const p of c.participants || []) {
+      const id = p.userId || p.user?.id;
+      const name = userDisplayName(p.user);
+      if (!id || !name) continue;
+      if (p.role === "CASE_MANAGER") caseManagers.set(id, { id, name });
+      if (p.role === "NEUTRAL") neutrals.set(id, { id, name });
+    }
+  }
+  const byName = (a, b) =>
+    String(a.name).localeCompare(String(b.name), undefined, {
+      sensitivity: "base",
+    });
+  return {
+    caseManagers: [...caseManagers.values()].sort(byName),
+    neutrals: [...neutrals.values()].sort(byName),
   };
 };
 
 const fetchCaseStatusRows = async (currentUser, query) => {
-  const page = Number(query.page) || 1;
-  const limit = Number(query.limit) || 10;
-  const where = buildCaseReportFilters(currentUser, query);
-  const { cases, total } = await caseRepository.getCases({
-    where,
-    skip: (page - 1) * limit,
-    take: limit,
-    orderBy: { updatedAt: "desc" },
+  const q = applyDateRangePreset(query);
+  const page = Number(q.page) || 1;
+  const limit = Math.min(
+    Number(q.limit) || 10,
+    String(q.format).toLowerCase() === "csv" ? CSV_EXPORT_MAX_ROWS : 100,
+  );
+  const where = buildCaseReportFilters(currentUser, q, {
+    dateField: "lastContact",
   });
+  const [{ cases, total }, filterOptions] = await Promise.all([
+    caseRepository.getCases({
+      where,
+      skip: (page - 1) * limit,
+      take: limit,
+      orderBy: { updatedAt: "desc" },
+    }),
+    buildParticipantFilterOptions(currentUser),
+  ]);
   return {
     rows: cases.map(mapCaseStatusRow),
     pagination: paginationMeta(page, limit, total),
+    filterOptions,
   };
 };
 
@@ -242,8 +425,10 @@ const fetchDisputeTypeRows = async (currentUser, query) => {
       matterName: row.matterName,
       status: row.status,
       neutral: row.neutral,
+      neutralName: row.neutralName,
     })),
     pagination: result.pagination,
+    filterOptions: result.filterOptions,
   };
 };
 
@@ -584,48 +769,90 @@ const fetchOverdueInvoicesRows = async (currentUser, query) => {
   };
 };
 
+const escapeCsvCell = (value) => {
+  if (value == null) return "";
+  const text = value instanceof Date ? value.toISOString() : String(value);
+  if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
+};
+
+const rowsToCsv = (rows = []) => {
+  if (!rows.length) return "";
+  const headers = Object.keys(rows[0]);
+  const lines = [headers.join(",")];
+  for (const row of rows) {
+    lines.push(headers.map((key) => escapeCsvCell(row[key])).join(","));
+  }
+  return `${lines.join("\n")}\n`;
+};
+
 const getReportData = async (reportId, query, currentUser) => {
   const report = getReportDefinition(reportId);
   if (!report) throw new ApiError(404, "Report not found.");
 
+  const q = applyDateRangePreset({ ...query });
+  const isCsv = String(q.format || "").toLowerCase() === "csv";
+  if (isCsv) {
+    q.page = 1;
+    q.limit = CSV_EXPORT_MAX_ROWS;
+  }
+
   let dataset;
   switch (reportId) {
     case "case-status":
-      dataset = await fetchCaseStatusRows(currentUser, query);
+      dataset = await fetchCaseStatusRows(currentUser, q);
       break;
     case "dispute-type":
-      dataset = await fetchDisputeTypeRows(currentUser, query);
+      dataset = await fetchDisputeTypeRows(currentUser, q);
       break;
     case "inquiry-status":
-      dataset = await fetchInquiryStatusRows(currentUser, query);
+      dataset = await fetchInquiryStatusRows(currentUser, q);
       break;
     case "all-contacts":
-      dataset = await fetchContactRows(query);
+      dataset = await fetchContactRows(q);
       break;
     case "neutral-contact":
-      dataset = await fetchContactRows(query, { neutralOnly: true });
+      dataset = await fetchContactRows(q, { neutralOnly: true });
       break;
     case "hearings-upcoming":
-      dataset = await fetchUpcomingHearingsRows(currentUser, query);
+      dataset = await fetchUpcomingHearingsRows(currentUser, q);
       break;
     case "invoices-overdue":
-      dataset = await fetchOverdueInvoicesRows(currentUser, query);
+      dataset = await fetchOverdueInvoicesRows(currentUser, q);
       break;
     default:
       throw new ApiError(404, "Report not found.");
   }
 
+  const enrichedReport = enrichCatalogueItem(report, new Date());
+  const filterOptions =
+    dataset.filterOptions ||
+    (["case-status", "dispute-type", "hearings-upcoming", "invoices-overdue"].includes(
+      reportId,
+    )
+      ? await buildParticipantFilterOptions(currentUser)
+      : undefined);
+
+  if (isCsv) {
+    const stamp = new Date().toISOString().slice(0, 10);
+    return {
+      format: "csv",
+      filename: `${reportId}-${stamp}.csv`,
+      csv: rowsToCsv(dataset.rows),
+      rowCount: dataset.rows.length,
+    };
+  }
+
   return {
-    report: {
-      ...report,
-      generated: new Date().toISOString(),
-    },
+    report: enrichedReport,
     rows: dataset.rows,
     pagination: dataset.pagination,
+    ...(filterOptions ? { filterOptions } : {}),
   };
 };
 
 module.exports = {
   listReports,
   getReportData,
+  rowsToCsv,
 };

@@ -2,11 +2,6 @@ const express = require("express");
 const notificationController = require("../controllers/notification.controller");
 const auth = require("../middlewares/auth.middleware");
 const validate = require("../middlewares/validate.middleware");
-const { requirePermission } = require("../middlewares/permission.middleware");
-const {
-  PermissionModule,
-  PermissionAction,
-} = require("../constants/permission.constants");
 const {
   notificationIdSchema,
   listNotificationsSchema,
@@ -14,30 +9,25 @@ const {
 
 const router = express.Router();
 
+// Inbox is always scoped to the authenticated user — no module permission required
+// (e.g. ACCOUNTING_STAFF has no CASES VIEW but must read their own notifications).
 router.use(auth);
 
 router.get(
   "/",
-  requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
   validate(listNotificationsSchema, "query"),
   notificationController.getNotifications,
 );
 
-router.get(
-  "/unread-count",
-  requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
-  notificationController.getUnreadCount,
-);
+router.get("/unread-count", notificationController.getUnreadCount);
 
 router.patch(
   "/read-all",
-  requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
   notificationController.markAllNotificationsRead,
 );
 
 router.patch(
   "/:notificationId/read",
-  requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
   validate(notificationIdSchema, "params"),
   notificationController.markNotificationRead,
 );

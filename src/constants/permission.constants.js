@@ -118,7 +118,17 @@ const PERMISSIONS = {
     ],
     [PermissionModule.TIMESHEETS]: [
       PermissionAction.VIEW,
+      PermissionAction.CREATE,
+      PermissionAction.EDIT,
       PermissionAction.APPROVE,
+    ],
+    [PermissionModule.DOCUMENTS]: [
+      PermissionAction.VIEW,
+      PermissionAction.CREATE,
+    ],
+    [PermissionModule.REPORTS]: [
+      PermissionAction.VIEW,
+      PermissionAction.EXPORT,
     ],
   },
 };

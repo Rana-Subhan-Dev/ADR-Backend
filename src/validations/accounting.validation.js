@@ -1,4 +1,5 @@
 const Joi = require("joi");
+const { TimesheetActivityType } = require("@prisma/client");
 
 const caseFinancialsListQuerySchema = Joi.object({
   search: Joi.string().trim().max(255).allow("").optional(),
@@ -21,6 +22,20 @@ const caseFinancialsListQuerySchema = Joi.object({
   limit: Joi.number().integer().min(1).max(100).default(10),
 });
 
+const timesheetsListQuerySchema = Joi.object({
+  search: Joi.string().trim().max(255).allow("").optional(),
+  dateRange: Joi.string().valid("30", "60", "90", 30, 60, 90).optional(),
+  hearingId: Joi.string().uuid().optional(),
+  activityType: Joi.string()
+    .valid(...Object.values(TimesheetActivityType))
+    .optional(),
+  status: Joi.string()
+    .valid("DRAFT", "SUBMITTED", "APPROVED", "REJECTED")
+    .optional(),
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(100).default(10),
+});
+
 const caseIdParamSchema = Joi.object({
   caseId: Joi.string().uuid().required(),
 });
@@ -31,6 +46,7 @@ const contactCaseManagerSchema = Joi.object({
 
 module.exports = {
   caseFinancialsListQuerySchema,
+  timesheetsListQuerySchema,
   caseIdParamSchema,
   contactCaseManagerSchema,
 };
