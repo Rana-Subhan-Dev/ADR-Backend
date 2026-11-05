@@ -137,11 +137,26 @@ const recordCreditNote = respond(
     billingService.recordCreditNote(req.params.invoiceId, req.body, req.user),
 );
 
-const getPaymentTracking = respond(
-  200,
-  "Payment tracking records fetched successfully.",
-  (req) => billingService.getPaymentTracking(req.query, req.user),
-);
+const getPaymentTracking = asyncHandler(async (req, res) => {
+  const data = await billingService.getPaymentTracking(req.query, req.user);
+  if (data?.format === "csv") {
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${data.filename}"`,
+    );
+    return res.status(200).send(data.csv);
+  }
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        data,
+        "Payment tracking records fetched successfully.",
+      ),
+    );
+});
 
 const updateInvoicePaymentStatus = respond(
   200,
@@ -159,6 +174,16 @@ const syncInvoiceToQuickBooks = respond(
   "Invoice synced with QuickBooks successfully.",
   (req) =>
     billingService.syncInvoiceToQuickBooks(req.params.invoiceId, req.user),
+);
+
+const sendInvoicePaymentReminder = respond(
+  200,
+  "Payment reminder sent successfully.",
+  (req) =>
+    billingService.sendInvoicePaymentReminder(
+      req.params.invoiceId,
+      req.user,
+    ),
 );
 
 const getQuickBooksSyncLogs = respond(
@@ -220,6 +245,7 @@ module.exports = {
   getPaymentTracking,
   updateInvoicePaymentStatus,
   syncInvoiceToQuickBooks,
+  sendInvoicePaymentReminder,
   getQuickBooksSyncLogs,
   retryQuickBooksSync,
   generateNeutralPaymentStatement,

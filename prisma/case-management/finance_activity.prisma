@@ -1,0 +1,43 @@
+// Append-only finance activity log for Accounting Staff.
+// Separate from AuditLog so list rows can carry denormalized case / invoice /
+// timesheet / payment labels and a stable FAL action vocabulary.
+
+model FinanceActivityLog {
+  id String @id @default(uuid())
+
+  occurredAt DateTime @default(now()) @db.Timestamp(3)
+
+  action String
+
+  actingUserId String?
+  actingUser   User?   @relation("FinanceActivityActingUser", fields: [actingUserId], references: [id], onDelete: SetNull)
+  isSystem     Boolean @default(false)
+
+  caseId      String?
+  caseNumber  String?
+  matterName  String?
+
+  invoiceId     String?
+  invoiceNumber String?
+
+  timesheetId     String?
+  timesheetNumber String?
+
+  paymentId     String?
+  paymentNumber String?
+
+  previousValue Json?
+  newValue      Json?
+  reason        String? @db.Text
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([occurredAt])
+  @@index([caseId])
+  @@index([invoiceId])
+  @@index([timesheetId])
+  @@index([paymentId])
+  @@index([action])
+  @@index([actingUserId])
+  @@map("finance_activity_logs")
+}

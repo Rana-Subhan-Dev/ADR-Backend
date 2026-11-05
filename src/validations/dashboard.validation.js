@@ -34,9 +34,15 @@ const clientDashboardQuerySchema = Joi.object({
   casesLimit: Joi.number().integer().min(1).max(50).optional(),
 });
 
+const accountingDashboardQuerySchema = Joi.object({
+  paymentActivityLimit: Joi.number().integer().min(1).max(20).default(6),
+  syncFailureLimit: Joi.number().integer().min(1).max(50).default(10),
+});
+
 module.exports = {
   overviewQuerySchema,
   lawyerDashboardQuerySchema,
   caseManagerDashboardQuerySchema,
   clientDashboardQuerySchema,
+  accountingDashboardQuerySchema,
 };

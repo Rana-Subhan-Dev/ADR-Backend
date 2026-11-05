@@ -50,9 +50,22 @@ const getClientDashboard = asyncHandler(async (req, res) =>
     ),
 );
 
+const getAccountingDashboard = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await dashboardService.getAccountingDashboard(req.query, req.user),
+        "Accounting dashboard fetched successfully.",
+      ),
+    ),
+);
+
 module.exports = {
   getOverview,
   getLawyerDashboard,
   getCaseManagerDashboard,
   getClientDashboard,
+  getAccountingDashboard,
 };

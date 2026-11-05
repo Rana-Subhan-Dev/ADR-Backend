@@ -53,6 +53,7 @@ model User {
   sessions                   Session[]
   calendarConnections        UserCalendarConnection[]
   auditLogs                  AuditLog[]
+  financeActivityLogs        FinanceActivityLog[]     @relation("FinanceActivityActingUser")
   legalAcknowledgements      LegalAcknowledgement[]
   notifications              Notification[]
   ownedContacts              Contact[]                @relation("ContactOwner")

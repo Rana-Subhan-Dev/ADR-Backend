@@ -888,9 +888,352 @@ const getClientDashboard = async (query, currentUser) => {
   };
 };
 
+const ACCOUNTING_DASHBOARD_ROLES = new Set([
+  RoleName.ACCOUNTING_STAFF,
+  RoleName.SUPER_ADMIN,
+]);
+
+const DEFAULT_PAYMENT_ACTIVITY_LIMIT = 6;
+const DEFAULT_SYNC_FAILURE_LIMIT = 10;
+
+const roundMoneyDash = (value) => Math.round(Number(value || 0) * 100) / 100;
+
+const partyNameFromCaseParty = (party) => {
+  if (!party) return null;
+  if (party.organizationName?.trim()) return party.organizationName.trim();
+  const name = [party.firstName, party.lastName]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  return name || party.email || null;
+};
+
+const formatOutstandingLabel = (amount) =>
+  `$${Number(amount || 0).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+
+const accountingTimesheetStatus = async () => {
+  const [approved, rejected, pendingAudits, draft] = await Promise.all([
+    prisma.neutralTimesheet.count({
+      where: { approvalStatus: "APPROVED" },
+    }),
+    prisma.neutralTimesheet.count({
+      where: { approvalStatus: "REJECTED" },
+    }),
+    prisma.neutralTimesheet.count({
+      where: { status: "SUBMITTED", approvalStatus: "PENDING" },
+    }),
+    prisma.neutralTimesheet.count({
+      where: {
+        NOT: {
+          OR: [
+            { approvalStatus: "APPROVED" },
+            { approvalStatus: "REJECTED" },
+            { status: "SUBMITTED", approvalStatus: "PENDING" },
+          ],
+        },
+      },
+    }),
+  ]);
+
+  return { approved, rejected, draft, pendingAudits };
+};
+
+const accountingInvoiceSnapshot = async () => {
+  const invoices = await prisma.invoice.findMany({
+    where: {
+      invoiceStatus: { in: ["ISSUED", "SENT", "OVERDUE"] },
+    },
+    select: {
+      id: true,
+      amountDue: true,
+      dueDate: true,
+      paymentStatus: true,
+      invoiceStatus: true,
+      payments: { select: { amount: true } },
+      creditNotes: { select: { amount: true } },
+    },
+  });
+
+  const billingService = require("./billing.service");
+  const now = new Date();
+  let pending = 0;
+  let overdue = 0;
+  let partial = 0;
+  let paid = 0;
+  let outstandingBalance = 0;
+
+  const agingTotals = {
+    "0-30": 0,
+    "31-60": 0,
+    "61-90": 0,
+    "90+": 0,
+  };
+
+  const today = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+
+  for (const invoice of invoices) {
+    const balances = billingService.computeInvoiceBalances(invoice, now);
+
+    if (invoice.paymentStatus === "PAID") {
+      paid += 1;
+    } else if (invoice.paymentStatus === "PARTIAL") {
+      partial += 1;
+    } else if (balances.overdue) {
+      overdue += 1;
+    } else if (invoice.paymentStatus === "UNPAID") {
+      pending += 1;
+    }
+
+    if (balances.openBalance <= 0) continue;
+    outstandingBalance += balances.openBalance;
+
+    const dueDate = invoice.dueDate ? new Date(invoice.dueDate) : null;
+    const dueDay = dueDate
+      ? new Date(
+          Date.UTC(
+            dueDate.getUTCFullYear(),
+            dueDate.getUTCMonth(),
+            dueDate.getUTCDate(),
+          ),
+        )
+      : null;
+    const daysPastDue = dueDay
+      ? Math.max(0, Math.floor((today - dueDay) / (1000 * 60 * 60 * 24)))
+      : 0;
+
+    if (daysPastDue <= 30) agingTotals["0-30"] += balances.openBalance;
+    else if (daysPastDue <= 60) agingTotals["31-60"] += balances.openBalance;
+    else if (daysPastDue <= 90) agingTotals["61-90"] += balances.openBalance;
+    else agingTotals["90+"] += balances.openBalance;
+  }
+
+  outstandingBalance = roundMoneyDash(outstandingBalance);
+  const totalOutstanding = outstandingBalance;
+  const bucketDefs = [
+    { id: "0-30", label: "Current (0-30 days)" },
+    { id: "31-60", label: "31-60 days" },
+    { id: "61-90", label: "61-90 days" },
+    { id: "90+", label: "90+ days" },
+  ];
+
+  const buckets = bucketDefs.map((def) => {
+    const amount = roundMoneyDash(agingTotals[def.id]);
+    const percent =
+      totalOutstanding > 0
+        ? Math.round((amount / totalOutstanding) * 100)
+        : 0;
+    return { ...def, amount, percent };
+  });
+
+  return {
+    invoiceStatus: {
+      pending,
+      overdue,
+      partial,
+      paid,
+      outstandingBalance,
+    },
+    invoiceAging: {
+      totalOutstanding,
+      buckets,
+    },
+  };
+};
+
+const accountingQuickBooksSync = async (syncFailureLimit) => {
+  const where = {
+    integrationType: "QUICKBOOKS",
+    status: "FAILED",
+  };
+
+  const [failureCount, logs] = await Promise.all([
+    prisma.integrationSyncLog.count({ where }),
+    prisma.integrationSyncLog.findMany({
+      where,
+      orderBy: [{ lastAttemptAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+      take: syncFailureLimit,
+      select: {
+        id: true,
+        relatedRecordType: true,
+        relatedRecordId: true,
+        errorMessage: true,
+        status: true,
+        lastAttemptAt: true,
+        createdAt: true,
+      },
+    }),
+  ]);
+
+  const invoiceIds = logs
+    .filter((log) => log.relatedRecordType === "Invoice")
+    .map((log) => log.relatedRecordId);
+  const paymentIds = logs
+    .filter((log) => log.relatedRecordType === "Payment")
+    .map((log) => log.relatedRecordId);
+
+  const [invoices, payments] = await Promise.all([
+    invoiceIds.length
+      ? prisma.invoice.findMany({
+          where: { id: { in: invoiceIds } },
+          select: { id: true, invoiceNumber: true },
+        })
+      : Promise.resolve([]),
+    paymentIds.length
+      ? prisma.payment.findMany({
+          where: { id: { in: paymentIds } },
+          select: {
+            id: true,
+            invoice: { select: { invoiceNumber: true } },
+          },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const invoiceById = new Map(invoices.map((row) => [row.id, row]));
+  const paymentById = new Map(payments.map((row) => [row.id, row]));
+
+  const failures = logs.map((log) => {
+    let recordRef = log.relatedRecordId;
+    let recordType = log.relatedRecordType || "Record";
+
+    if (log.relatedRecordType === "Invoice") {
+      const invoice = invoiceById.get(log.relatedRecordId);
+      recordRef = invoice?.invoiceNumber || recordRef;
+      recordType = "Invoice";
+    } else if (log.relatedRecordType === "Payment") {
+      const payment = paymentById.get(log.relatedRecordId);
+      recordRef = payment?.invoice?.invoiceNumber
+        ? `PAY-${String(log.relatedRecordId).slice(0, 8).toUpperCase()}`
+        : `PAY-${String(log.relatedRecordId).slice(0, 8).toUpperCase()}`;
+      recordType = "Payment Status";
+    }
+
+    return {
+      id: log.id,
+      recordRef,
+      recordType,
+      relatedRecordId: log.relatedRecordId,
+      relatedRecordType: log.relatedRecordType,
+      errorMessage: log.errorMessage || "Sync failed",
+      lastAttemptAt: log.lastAttemptAt || log.createdAt,
+      status: log.status,
+    };
+  });
+
+  return { failureCount, failures };
+};
+
+const accountingPaymentActivity = async (limit) => {
+  const billingService = require("./billing.service");
+  const payments = await prisma.payment.findMany({
+    orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+    take: limit,
+    select: {
+      id: true,
+      amount: true,
+      paymentDate: true,
+      createdAt: true,
+      invoice: {
+        select: {
+          id: true,
+          invoiceNumber: true,
+          amountDue: true,
+          dueDate: true,
+          paymentStatus: true,
+          invoiceStatus: true,
+          payerCaseParty: {
+            select: {
+              firstName: true,
+              lastName: true,
+              organizationName: true,
+              email: true,
+            },
+          },
+          payments: { select: { amount: true } },
+          creditNotes: { select: { amount: true } },
+        },
+      },
+    },
+  });
+
+  const now = new Date();
+  return payments.map((payment) => {
+    const invoice = payment.invoice;
+    const balances = billingService.computeInvoiceBalances(invoice, now);
+    const payerName =
+      partyNameFromCaseParty(invoice?.payerCaseParty) || "payer";
+    const invoiceNumber = invoice?.invoiceNumber || "Invoice";
+    const paymentStatus = invoice?.paymentStatus || null;
+    const outstanding = balances.openBalance;
+    const overdue = balances.overdue;
+
+    let tone = "orange";
+    let text = `${invoiceNumber} awaiting payment from ${payerName}`;
+
+    if (paymentStatus === "PAID" || outstanding <= 0) {
+      tone = "green";
+      text = `${invoiceNumber} paid in full by ${payerName}`;
+    } else if (paymentStatus === "PARTIAL") {
+      tone = "orange";
+      text = `Partial payment recorded for ${invoiceNumber} — ${formatOutstandingLabel(outstanding)} outstanding`;
+    } else if (overdue) {
+      tone = "red";
+      text = `${invoiceNumber} overdue — ${formatOutstandingLabel(outstanding)} from ${payerName}`;
+    }
+
+    return {
+      id: payment.id,
+      invoiceId: invoice?.id || null,
+      invoiceNumber,
+      payerName,
+      paymentStatus,
+      outstanding,
+      text,
+      occurredAt: payment.paymentDate || payment.createdAt,
+      tone,
+    };
+  });
+};
+
+const getAccountingDashboard = async (query, currentUser) => {
+  if (!ACCOUNTING_DASHBOARD_ROLES.has(currentUser?.role?.name)) {
+    throw new ApiError(
+      403,
+      "Accounting dashboard is only available to ACCOUNTING_STAFF and SUPER_ADMIN users.",
+    );
+  }
+
+  const paymentActivityLimit =
+    Number(query.paymentActivityLimit) || DEFAULT_PAYMENT_ACTIVITY_LIMIT;
+  const syncFailureLimit =
+    Number(query.syncFailureLimit) || DEFAULT_SYNC_FAILURE_LIMIT;
+
+  const [timesheetStatus, invoiceSnapshot, quickBooksSync, paymentActivity] =
+    await Promise.all([
+      accountingTimesheetStatus(),
+      accountingInvoiceSnapshot(),
+      accountingQuickBooksSync(syncFailureLimit),
+      accountingPaymentActivity(paymentActivityLimit),
+    ]);
+
+  return {
+    timesheetStatus,
+    invoiceStatus: invoiceSnapshot.invoiceStatus,
+    invoiceAging: invoiceSnapshot.invoiceAging,
+    quickBooksSync,
+    paymentActivity,
+  };
+};
+
 module.exports = {
   getOverview,
   getLawyerDashboard,
   getCaseManagerDashboard,
   getClientDashboard,
+  getAccountingDashboard,
 };

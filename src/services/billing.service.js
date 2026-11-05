@@ -2,6 +2,8 @@ const prisma = require("../config/prisma");
 const { runTransaction } = require("../config/prisma");
 const billingRepository = require("../repositories/billing.repository");
 const caseService = require("./case.service");
+const notificationService = require("./notification.service");
+const financeActivityService = require("./financeActivity.service");
 const ApiError = require("../utils/apiError");
 const { sendEmail } = require("../utils/sendEmail");
 const { getObjectBuffer } = require("../utils/s3Helper");
@@ -77,22 +79,55 @@ const endOfUtcDay = (value) => {
   return date;
 };
 
-const runInvoiceGenerationTransaction = async (fn, options) => {
+const isRetryableSerializationConflict = (error) => {
+  if (error?.code === "P2034") return true;
+  const message = String(error?.message || "");
+  return (
+    /write conflict or a deadlock/i.test(message) ||
+    /could not serialize access/i.test(message) ||
+    /serialization failure/i.test(message)
+  );
+};
+
+const runSerializableWithRetry = async (
+  fn,
+  options = {},
+  { maxAttempts = 3, alsoRetryInvoiceNumberConflict = false } = {},
+) => {
   let lastError;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return await runTransaction(fn, options);
+      return await runTransaction(fn, {
+        isolationLevel: "Serializable",
+        ...options,
+      });
     } catch (error) {
       lastError = error;
       const target = String(error?.meta?.target || "");
       const retryable =
-        error?.code === "P2034" ||
-        (error?.code === "P2002" && target.includes("invoiceNumber"));
-      if (!retryable || attempt === 3) throw error;
+        isRetryableSerializationConflict(error) ||
+        (alsoRetryInvoiceNumberConflict &&
+          error?.code === "P2002" &&
+          target.includes("invoiceNumber"));
+      if (!retryable || attempt === maxAttempts) {
+        if (isRetryableSerializationConflict(error)) {
+          throw new ApiError(
+            409,
+            "This invoice changed while the payment was being saved. Please refresh and try again.",
+          );
+        }
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 40 * attempt));
     }
   }
   throw lastError;
 };
+
+const runInvoiceGenerationTransaction = async (fn, options) =>
+  runSerializableWithRetry(fn, options, {
+    alsoRetryInvoiceNumberConflict: true,
+  });
 
 const emptyToNull = (value) =>
   value === undefined || value === "" ? null : value;
@@ -970,6 +1005,24 @@ const saveCaseBillingConfig = async (
     );
 
     return buildCaseBillingConfigResponse(caseContext, saved);
+  }).then(async (result) => {
+    const prevSplit = existing?.splitBillingEnabled
+      ? "CUSTOM_SPLIT"
+      : "SPLIT_EVENLY";
+    const nextSplit = effectiveConfiguration.splitBillingEnabled
+      ? "CUSTOM_SPLIT"
+      : "SPLIT_EVENLY";
+    await financeActivityService.appendFinanceActivity({
+      action: "BILLING_CONFIGURATION_UPDATED",
+      actingUser: currentUser,
+      caseId,
+      caseNumber: caseContext?.caseNumber || null,
+      matterName:
+        caseContext?.inquiry?.matterName || caseContext?.title || null,
+      previousValue: existing ? prevSplit : null,
+      newValue: nextSplit,
+    });
+    return result;
   });
 };
 
@@ -2663,6 +2716,19 @@ const finalizeInvoice = async (invoiceId, currentUser) => {
     });
 
     return buildCanonicalInvoice(updated, currentUser);
+  }).then(async (result) => {
+    await financeActivityService.appendFinanceActivity({
+      action: "INVOICE_FINALIZED",
+      actingUser: currentUser,
+      caseId: existing.caseId,
+      caseNumber: existing.case?.caseNumber || null,
+      matterName: existing.case?.title || null,
+      invoiceId: existing.id,
+      invoiceNumber: existing.invoiceNumber,
+      previousValue: "DRAFT",
+      newValue: "FINALIZED",
+    });
+    return result;
   });
 };
 
@@ -2880,6 +2946,19 @@ const sendInvoice = async (invoiceId, payload, currentUser) => {
         attachmentIds,
       },
     };
+  }).then(async (result) => {
+    await financeActivityService.appendFinanceActivity({
+      action: "INVOICE_SENT",
+      actingUser: currentUser,
+      caseId: invoice.caseId,
+      caseNumber: invoice.case?.caseNumber || null,
+      matterName: invoice.case?.title || null,
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      previousValue: "FINALIZED",
+      newValue: "SENT",
+    });
+    return result;
   });
 };
 
@@ -2942,6 +3021,20 @@ const voidInvoice = async (invoiceId, reason, currentUser) => {
     });
 
     return buildCanonicalInvoice(updated, currentUser);
+  }).then(async (result) => {
+    await financeActivityService.appendFinanceActivity({
+      action: "INVOICE_VOIDED",
+      actingUser: currentUser,
+      caseId: existing.caseId,
+      caseNumber: existing.case?.caseNumber || null,
+      matterName: existing.case?.title || null,
+      invoiceId: existing.id,
+      invoiceNumber: existing.invoiceNumber,
+      previousValue: "SENT",
+      newValue: "VOIDED",
+      reason: reason || null,
+    });
+    return result;
   });
 };
 
@@ -2961,8 +3054,9 @@ const reissueInvoice = async (invoiceId, payload, currentUser) => {
   );
   await validateInvoiceAttachmentDocuments(existing.caseId, sourceAttachments);
 
+  let result;
   try {
-    return await runTransaction(async (tx) => {
+    result = await runTransaction(async (tx) => {
       const newNumber = await generateInvoiceNumber(tx);
       const lineItemsData = existing.lineItems.map((li) => ({
         description: li.description,
@@ -3073,6 +3167,21 @@ const reissueInvoice = async (invoiceId, payload, currentUser) => {
     }
     throw error;
   }
+
+  await financeActivityService.appendFinanceActivity({
+    action: "INVOICE_REISSUED",
+    actingUser: currentUser,
+    caseId: existing.caseId,
+    caseNumber: existing.case?.caseNumber || null,
+    matterName: existing.case?.title || null,
+    invoiceId: result?.id || null,
+    invoiceNumber: result?.invoiceNumber || null,
+    previousValue: "VOIDED",
+    newValue: "DRAFT",
+    reason: payload.reason || null,
+  });
+
+  return result;
 };
 
 const getInvoicesList = async (query, currentUser) => {
@@ -3166,84 +3275,96 @@ const recordPayment = async (invoiceId, payload, currentUser) => {
   }
 
   const paymentAmount = Number(payload.amount);
-  return runTransaction(
-    async (tx) => {
-      const currentInvoice = await billingRepository.findInvoiceById(
-        invoiceId,
-        tx,
+  return runSerializableWithRetry(async (tx) => {
+    const currentInvoice = await billingRepository.findInvoiceById(
+      invoiceId,
+      tx,
+    );
+    const balances = computeInvoiceBalances(currentInvoice);
+    if (paymentAmount > balances.openBalance) {
+      throw new ApiError(
+        409,
+        `Payment amount exceeds the open balance of ${balances.openBalance.toFixed(2)}.`,
       );
-      const balances = computeInvoiceBalances(currentInvoice);
-      if (paymentAmount > balances.openBalance) {
-        throw new ApiError(
-          409,
-          `Payment amount exceeds the open balance of ${balances.openBalance.toFixed(2)}.`,
-        );
-      }
-      const newPaymentStatus =
-        roundMoney(paymentAmount) >= balances.openBalance
-          ? PaymentStatus.PAID
-          : PaymentStatus.PARTIAL;
-      const nextInvoiceStatus =
-        newPaymentStatus === PaymentStatus.PAID &&
-        currentInvoice.invoiceStatus === InvoiceStatus.OVERDUE
-          ? InvoiceStatus.SENT
-          : balances.overdue &&
-              [InvoiceStatus.ISSUED, InvoiceStatus.SENT].includes(
-                currentInvoice.invoiceStatus,
-              )
-            ? InvoiceStatus.OVERDUE
-            : currentInvoice.invoiceStatus;
-      const payment = await tx.payment.create({
-        data: {
-          invoiceId,
-          amount: paymentAmount,
-          paymentDate: new Date(payload.paymentDate),
-          method: payload.method || null,
-          referenceNumber: emptyToNull(payload.referenceNumber) || null,
-          notes: emptyToNull(payload.notes) || null,
-        },
-      });
+    }
+    const newPaymentStatus =
+      roundMoney(paymentAmount) >= balances.openBalance
+        ? PaymentStatus.PAID
+        : PaymentStatus.PARTIAL;
+    const nextInvoiceStatus =
+      newPaymentStatus === PaymentStatus.PAID &&
+      currentInvoice.invoiceStatus === InvoiceStatus.OVERDUE
+        ? InvoiceStatus.SENT
+        : balances.overdue &&
+            [InvoiceStatus.ISSUED, InvoiceStatus.SENT].includes(
+              currentInvoice.invoiceStatus,
+            )
+          ? InvoiceStatus.OVERDUE
+          : currentInvoice.invoiceStatus;
+    const payment = await tx.payment.create({
+      data: {
+        invoiceId,
+        amount: paymentAmount,
+        paymentDate: new Date(payload.paymentDate),
+        method: payload.method || null,
+        referenceNumber: emptyToNull(payload.referenceNumber) || null,
+        notes: emptyToNull(payload.notes) || null,
+      },
+    });
 
-      const updatedInvoice = await tx.invoice.update({
-        where: { id: invoiceId },
-        data: {
-          paymentStatus: newPaymentStatus,
-          invoiceStatus: nextInvoiceStatus,
-          version: { increment: 1 },
-        },
-        select: billingRepository.invoiceSelect,
-      });
+    const updatedInvoice = await tx.invoice.update({
+      where: { id: invoiceId },
+      data: {
+        paymentStatus: newPaymentStatus,
+        invoiceStatus: nextInvoiceStatus,
+        version: { increment: 1 },
+      },
+      select: billingRepository.invoiceSelect,
+    });
 
-      await tx.auditLog.create({
-        data: {
-          actingUserId: currentUser.id,
-          actingUserRoleSnapshot: currentUser.role?.name || null,
-          action: "RECORD_PAYMENT",
-          module: "BILLING",
-          affectedRecordType: "Payment",
-          affectedRecordId: payment.id,
-          newValue: JSON.parse(JSON.stringify(payment)),
-        },
-      });
+    await tx.auditLog.create({
+      data: {
+        actingUserId: currentUser.id,
+        actingUserRoleSnapshot: currentUser.role?.name || null,
+        action: "RECORD_PAYMENT",
+        module: "BILLING",
+        affectedRecordType: "Payment",
+        affectedRecordId: payment.id,
+        newValue: JSON.parse(JSON.stringify(payment)),
+      },
+    });
 
-      await tx.caseTimelineEvent.create({
-        data: {
-          caseId: invoice.caseId,
-          eventType: CaseTimelineEventType.PAYMENT_RECEIVED,
-          relatedRecordType: "Payment",
-          relatedRecordId: payment.id,
-          summary: `Payment of $${paymentAmount.toFixed(2)} recorded for invoice ${invoice.invoiceNumber}`,
-          actorUserId: currentUser.id,
-        },
-      });
+    await tx.caseTimelineEvent.create({
+      data: {
+        caseId: invoice.caseId,
+        eventType: CaseTimelineEventType.PAYMENT_RECEIVED,
+        relatedRecordType: "Payment",
+        relatedRecordId: payment.id,
+        summary: `Payment of $${paymentAmount.toFixed(2)} recorded for invoice ${invoice.invoiceNumber}`,
+        actorUserId: currentUser.id,
+      },
+    });
 
-      return {
-        ...payment,
-        invoice: buildCanonicalInvoice(updatedInvoice, currentUser),
-      };
-    },
-    { isolationLevel: "Serializable" },
-  );
+    return {
+      ...payment,
+      invoice: buildCanonicalInvoice(updatedInvoice, currentUser),
+    };
+  }).then(async (result) => {
+    await financeActivityService.appendFinanceActivity({
+      action: "PAYMENT_RECORDED",
+      actingUser: currentUser,
+      caseId: invoice.caseId,
+      caseNumber: invoice.case?.caseNumber || null,
+      matterName: invoice.case?.title || null,
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      paymentId: result.id,
+      previousValue: invoice.paymentStatus,
+      newValue: result.invoice?.paymentStatus || null,
+      reason: payload.notes || null,
+    });
+    return result;
+  });
 };
 
 const recordCreditNote = async (invoiceId, payload, currentUser) => {
@@ -3262,87 +3383,137 @@ const recordCreditNote = async (invoiceId, payload, currentUser) => {
   }
 
   const creditAmount = Number(payload.amount);
-  return runTransaction(
-    async (tx) => {
-      const currentInvoice = await billingRepository.findInvoiceById(
-        invoiceId,
-        tx,
+  return runSerializableWithRetry(async (tx) => {
+    const currentInvoice = await billingRepository.findInvoiceById(
+      invoiceId,
+      tx,
+    );
+    const balances = computeInvoiceBalances(currentInvoice);
+    if (creditAmount > balances.openBalance) {
+      throw new ApiError(
+        409,
+        `Credit amount exceeds the open balance of ${balances.openBalance.toFixed(2)}.`,
       );
-      const balances = computeInvoiceBalances(currentInvoice);
-      if (creditAmount > balances.openBalance) {
-        throw new ApiError(
-          409,
-          `Credit amount exceeds the open balance of ${balances.openBalance.toFixed(2)}.`,
-        );
-      }
-      const newPaymentStatus =
-        roundMoney(creditAmount) >= balances.openBalance
-          ? PaymentStatus.PAID
-          : PaymentStatus.PARTIAL;
-      const nextInvoiceStatus =
-        newPaymentStatus === PaymentStatus.PAID &&
-        currentInvoice.invoiceStatus === InvoiceStatus.OVERDUE
-          ? InvoiceStatus.SENT
-          : balances.overdue &&
-              [InvoiceStatus.ISSUED, InvoiceStatus.SENT].includes(
-                currentInvoice.invoiceStatus,
-              )
-            ? InvoiceStatus.OVERDUE
-            : currentInvoice.invoiceStatus;
-      const creditNote = await tx.creditNote.create({
-        data: {
-          invoiceId,
-          amount: creditAmount,
-          reason: payload.reason,
-          issuedAt: new Date(payload.issuedAt),
-        },
-      });
+    }
+    const newPaymentStatus =
+      roundMoney(creditAmount) >= balances.openBalance
+        ? PaymentStatus.PAID
+        : PaymentStatus.PARTIAL;
+    const nextInvoiceStatus =
+      newPaymentStatus === PaymentStatus.PAID &&
+      currentInvoice.invoiceStatus === InvoiceStatus.OVERDUE
+        ? InvoiceStatus.SENT
+        : balances.overdue &&
+            [InvoiceStatus.ISSUED, InvoiceStatus.SENT].includes(
+              currentInvoice.invoiceStatus,
+            )
+          ? InvoiceStatus.OVERDUE
+          : currentInvoice.invoiceStatus;
+    const creditNote = await tx.creditNote.create({
+      data: {
+        invoiceId,
+        amount: creditAmount,
+        reason: payload.reason,
+        issuedAt: new Date(payload.issuedAt),
+      },
+    });
 
-      const updatedInvoice = await tx.invoice.update({
-        where: { id: invoiceId },
-        data: {
-          paymentStatus: newPaymentStatus,
-          invoiceStatus: nextInvoiceStatus,
-          version: { increment: 1 },
-        },
-        select: billingRepository.invoiceSelect,
-      });
+    const updatedInvoice = await tx.invoice.update({
+      where: { id: invoiceId },
+      data: {
+        paymentStatus: newPaymentStatus,
+        invoiceStatus: nextInvoiceStatus,
+        version: { increment: 1 },
+      },
+      select: billingRepository.invoiceSelect,
+    });
 
-      await tx.auditLog.create({
-        data: {
-          actingUserId: currentUser.id,
-          actingUserRoleSnapshot: currentUser.role?.name || null,
-          action: "RECORD_CREDIT_NOTE",
-          module: "BILLING",
-          affectedRecordType: "CreditNote",
-          affectedRecordId: creditNote.id,
-          reason: payload.reason,
-          newValue: JSON.parse(JSON.stringify(creditNote)),
-        },
-      });
+    await tx.auditLog.create({
+      data: {
+        actingUserId: currentUser.id,
+        actingUserRoleSnapshot: currentUser.role?.name || null,
+        action: "RECORD_CREDIT_NOTE",
+        module: "BILLING",
+        affectedRecordType: "CreditNote",
+        affectedRecordId: creditNote.id,
+        reason: payload.reason,
+        newValue: JSON.parse(JSON.stringify(creditNote)),
+      },
+    });
 
-      return {
-        ...creditNote,
-        invoice: buildCanonicalInvoice(updatedInvoice, currentUser),
-      };
-    },
-    { isolationLevel: "Serializable" },
-  );
+    return {
+      ...creditNote,
+      invoice: buildCanonicalInvoice(updatedInvoice, currentUser),
+    };
+  }).then(async (result) => {
+    await financeActivityService.appendFinanceActivity({
+      action: "CREDIT_NOTE_ISSUED",
+      actingUser: currentUser,
+      caseId: invoice.caseId,
+      caseNumber: invoice.case?.caseNumber || null,
+      matterName: invoice.case?.title || null,
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      previousValue: null,
+      newValue: "ISSUED",
+      reason: payload.reason || null,
+    });
+    return result;
+  });
 };
 
-const getPaymentTracking = async (query, currentUser) => {
-  if (!isAuthorizedForBilling(currentUser)) {
-    throw new ApiError(
-      403,
-      "You do not have permission to view payment tracking.",
+const daysFromUtc = (base, days) =>
+  new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+
+const escapePaymentCsvCell = (value) => {
+  if (value == null) return "";
+  const text = value instanceof Date ? value.toISOString() : String(value);
+  if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
+};
+
+const paymentTrackingRowsToCsv = (rows = []) => {
+  const headers = [
+    "Invoice",
+    "Matter Name",
+    "Case Manager",
+    "Neutral",
+    "Payer",
+    "Amount",
+    "Payment Status",
+    "Paid",
+    "Outstanding",
+    "Due Date",
+    "Aging",
+    "QuickBooks Sync",
+  ];
+  const lines = [headers.join(",")];
+  for (const row of rows) {
+    lines.push(
+      [
+        row.invoiceNumber,
+        row.matterName,
+        row.caseManagerName || row.caseManager,
+        row.neutralName || row.neutral,
+        row.payerDetails?.displayName || row.payer,
+        row.amounts?.totalAmount ?? row.totalAmount ?? row.amountDue,
+        row.paymentStatus,
+        row.amountPaid,
+        row.openBalance ?? row.outstanding,
+        row.dueDate,
+        row.agingBucket,
+        row.quickBooks?.status ?? row.quickBooksSyncStatus,
+      ]
+        .map(escapePaymentCsvCell)
+        .join(","),
     );
   }
-  const page = Number(query.page) || 1;
-  const limit = Math.min(Number(query.limit) || 20, 100);
-  const skip = (page - 1) * limit;
+  return `${lines.join("\n")}\n`;
+};
 
+const buildPaymentTrackingWhere = (query, currentUser, today) => {
   const caseScope = buildBillingCaseScope(currentUser);
-  let where = {
+  const where = {
     invoiceStatus: {
       in: [InvoiceStatus.ISSUED, InvoiceStatus.SENT, InvoiceStatus.OVERDUE],
     },
@@ -3352,25 +3523,50 @@ const getPaymentTracking = async (query, currentUser) => {
     where.case = caseScope;
   }
 
-  await assertCaseAccessIfProvided(query.caseId, currentUser);
   if (query.caseId) where.caseId = query.caseId;
-  if (query.invoiceId) {
-    await getInvoiceById(query.invoiceId, currentUser);
-    where.id = query.invoiceId;
-  }
-  if (query.paymentStatus) where.paymentStatus = query.paymentStatus;
+  if (query.invoiceId) where.id = query.invoiceId;
+  if (query.payerCasePartyId) where.payerCasePartyId = query.payerCasePartyId;
   if (query.invoiceStatus) where.invoiceStatus = query.invoiceStatus;
 
-  const now = new Date();
-  const today = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
-  );
-  const daysAgo = (days) =>
-    new Date(today.getTime() - days * 24 * 60 * 60 * 1000);
-  if (query.overdueOnly === true || query.overdueOnly === "true") {
-    where.dueDate = { lt: today };
+  const pastDueRequested =
+    query.pastDue === true ||
+    query.pastDue === "true" ||
+    query.overdueOnly === true ||
+    query.overdueOnly === "true" ||
+    query.paymentStatus === "OVERDUE" ||
+    query.dateRange === "overdue";
+
+  if (query.paymentStatus && query.paymentStatus !== "OVERDUE") {
+    where.paymentStatus = query.paymentStatus;
+  }
+
+  if (query.quickBooksSyncStatus === "NOT_SYNCED") {
+    where.quickBooksSyncStatus = null;
+  } else if (query.quickBooksSyncStatus) {
+    where.quickBooksSyncStatus = query.quickBooksSyncStatus;
+  }
+
+  const daysAgo = (days) => daysFromUtc(today, -days);
+  const daysAhead = (days) => daysFromUtc(today, days);
+
+  let dueDateFilter = null;
+  if (query.dateRange === "next30") {
+    dueDateFilter = { gte: today, lte: daysAhead(30) };
+  } else if (query.dateRange === "next60") {
+    dueDateFilter = { gte: today, lte: daysAhead(60) };
+  } else if (pastDueRequested) {
+    dueDateFilter = { lt: today };
     where.paymentStatus = { not: PaymentStatus.PAID };
   }
+
+  if (query.dueDateFrom || query.dueDateTo) {
+    dueDateFilter = {
+      ...(dueDateFilter || {}),
+      ...(query.dueDateFrom && { gte: new Date(query.dueDateFrom) }),
+      ...(query.dueDateTo && { lte: endOfUtcDay(query.dueDateTo) }),
+    };
+  }
+
   if (query.agingBucket) {
     const ranges = {
       current: { gte: today },
@@ -3379,15 +3575,44 @@ const getPaymentTracking = async (query, currentUser) => {
       "61-90": { lt: daysAgo(60), gte: daysAgo(90) },
       "90+": { lt: daysAgo(90) },
     };
-    where.dueDate = ranges[query.agingBucket];
+    dueDateFilter = ranges[query.agingBucket];
     where.paymentStatus = { not: PaymentStatus.PAID };
   }
 
+  if (dueDateFilter) where.dueDate = dueDateFilter;
+
   if (query.search) {
+    const term = String(query.search).trim();
     where.OR = [
-      { invoiceNumber: { contains: query.search, mode: "insensitive" } },
-      { case: { caseNumber: { contains: query.search, mode: "insensitive" } } },
-      { case: { title: { contains: query.search, mode: "insensitive" } } },
+      { invoiceNumber: { contains: term, mode: "insensitive" } },
+      { case: { caseNumber: { contains: term, mode: "insensitive" } } },
+      { case: { title: { contains: term, mode: "insensitive" } } },
+      {
+        payerCaseParty: {
+          OR: [
+            { firstName: { contains: term, mode: "insensitive" } },
+            { lastName: { contains: term, mode: "insensitive" } },
+            { organizationName: { contains: term, mode: "insensitive" } },
+          ],
+        },
+      },
+      {
+        case: {
+          participants: {
+            some: {
+              role: { in: ["CASE_MANAGER", "NEUTRAL"] },
+              accessStatus: "ACTIVE",
+              user: {
+                OR: [
+                  { firstName: { contains: term, mode: "insensitive" } },
+                  { lastName: { contains: term, mode: "insensitive" } },
+                  { email: { contains: term, mode: "insensitive" } },
+                ],
+              },
+            },
+          },
+        },
+      },
     ];
   }
 
@@ -3397,6 +3622,40 @@ const getPaymentTracking = async (query, currentUser) => {
       ...(query.toDate && { lte: endOfUtcDay(query.toDate) }),
     };
   }
+
+  return { where, caseScope };
+};
+
+const getPaymentTracking = async (query, currentUser) => {
+  if (!isAuthorizedForBilling(currentUser)) {
+    throw new ApiError(
+      403,
+      "You do not have permission to view payment tracking.",
+    );
+  }
+
+  const isCsv = String(query.format || "").toLowerCase() === "csv";
+  const page = isCsv ? 1 : Number(query.page) || 1;
+  const limit = isCsv
+    ? 10000
+    : Math.min(Number(query.limit) || 20, 100);
+  const skip = (page - 1) * limit;
+
+  await assertCaseAccessIfProvided(query.caseId, currentUser);
+  if (query.invoiceId) {
+    await getInvoiceById(query.invoiceId, currentUser);
+  }
+
+  const now = new Date();
+  const today = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+
+  const { where, caseScope } = buildPaymentTrackingWhere(
+    query,
+    currentUser,
+    today,
+  );
 
   const { invoices, total } = await billingRepository.getInvoices({
     where,
@@ -3420,11 +3679,15 @@ const getPaymentTracking = async (query, currentUser) => {
     const canonical = buildCanonicalInvoice(invoice, currentUser, { now });
     return {
       ...canonical,
+      id: invoice.id,
       invoiceId: invoice.id,
       invoiceNumber: invoice.invoiceNumber,
       caseId: invoice.caseId,
       caseNumber: invoice.case?.caseNumber || null,
       matterName: invoice.case?.title || null,
+      caseManagerName: canonical.caseManager,
+      neutralName: canonical.neutral,
+      payerCasePartyId: invoice.payerCasePartyId || null,
       invoiceDate: invoice.invoiceDate,
       dueDate: invoice.dueDate,
       amountDue: balances.amountDue,
@@ -3443,6 +3706,14 @@ const getPaymentTracking = async (query, currentUser) => {
     };
   });
 
+  if (isCsv) {
+    return {
+      format: "csv",
+      filename: `payment-tracking-${today.toISOString().slice(0, 10)}.csv`,
+      csv: paymentTrackingRowsToCsv(rows),
+    };
+  }
+
   const agingWhere = {
     invoiceStatus: {
       in: [InvoiceStatus.ISSUED, InvoiceStatus.SENT, InvoiceStatus.OVERDUE],
@@ -3452,13 +3723,38 @@ const getPaymentTracking = async (query, currentUser) => {
     ...(query.caseId ? { caseId: query.caseId } : {}),
   };
 
-  const allInvoices = await prisma.invoice.findMany({
-    where: agingWhere,
-    include: {
-      payments: true,
-      creditNotes: true,
-    },
-  });
+  const [allInvoices, filterSource] = await Promise.all([
+    prisma.invoice.findMany({
+      where: agingWhere,
+      include: {
+        payments: true,
+        creditNotes: true,
+      },
+    }),
+    prisma.invoice.findMany({
+      where: {
+        invoiceStatus: {
+          in: [InvoiceStatus.ISSUED, InvoiceStatus.SENT, InvoiceStatus.OVERDUE],
+        },
+        ...(Object.keys(caseScope).length > 0 ? { case: caseScope } : {}),
+      },
+      take: 200,
+      orderBy: { dueDate: "desc" },
+      select: {
+        caseId: true,
+        case: { select: { id: true, caseNumber: true, title: true } },
+        payerCasePartyId: true,
+        payerCaseParty: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            organizationName: true,
+          },
+        },
+      },
+    }),
+  ]);
 
   const aging = {
     current: 0,
@@ -3487,6 +3783,24 @@ const getPaymentTracking = async (query, currentUser) => {
     }
   }
 
+  const caseMap = new Map();
+  const payerMap = new Map();
+  for (const inv of filterSource) {
+    if (inv.case?.id && !caseMap.has(inv.case.id)) {
+      caseMap.set(inv.case.id, {
+        id: inv.case.id,
+        caseNumber: inv.case.caseNumber,
+        matterName: inv.case.title,
+      });
+    }
+    if (inv.payerCaseParty?.id && !payerMap.has(inv.payerCaseParty.id)) {
+      payerMap.set(inv.payerCaseParty.id, {
+        id: inv.payerCaseParty.id,
+        name: partyDisplayName(inv.payerCaseParty),
+      });
+    }
+  }
+
   return {
     ...paginate(rows, total, page, limit, "invoices"),
     payments: rows,
@@ -3497,6 +3811,10 @@ const getPaymentTracking = async (query, currentUser) => {
       days61to90: Number(aging.days61to90.toFixed(2)),
       days90Plus: Number(aging.days90Plus.toFixed(2)),
       totalOutstanding: Number(aging.totalOutstanding.toFixed(2)),
+    },
+    filterOptions: {
+      cases: Array.from(caseMap.values()).slice(0, 100),
+      payers: Array.from(payerMap.values()).slice(0, 100),
     },
   };
 };
@@ -3566,6 +3884,20 @@ const updateInvoicePaymentStatus = async (invoiceId, payload, currentUser) => {
     });
 
     return buildCanonicalInvoice(updated, currentUser);
+  }).then(async (result) => {
+    await financeActivityService.appendFinanceActivity({
+      action: "PAYMENT_RECORDED",
+      actingUser: currentUser,
+      caseId: invoice.caseId,
+      caseNumber: invoice.case?.caseNumber || null,
+      matterName: invoice.case?.title || null,
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      previousValue: invoice.paymentStatus,
+      newValue: paymentStatus,
+      reason: payload.notes || null,
+    });
+    return result;
   });
 };
 
@@ -3583,6 +3915,74 @@ const syncInvoiceToQuickBooks = async (invoiceId, currentUser) => {
     501,
     "QuickBooks transport is not configured. No invoice state was changed.",
   );
+};
+
+const sendInvoicePaymentReminder = async (invoiceId, currentUser) => {
+  const invoice = await billingRepository.findInvoiceById(invoiceId);
+  if (!invoice) throw new ApiError(404, "Invoice not found.");
+  await assertCanMutateCaseBilling(invoice.caseId, currentUser);
+
+  if (
+    ![InvoiceStatus.ISSUED, InvoiceStatus.SENT, InvoiceStatus.OVERDUE].includes(
+      invoice.invoiceStatus,
+    )
+  ) {
+    throw new ApiError(
+      400,
+      "Payment reminders can only be sent for finalized invoices.",
+    );
+  }
+  if (invoice.paymentStatus === PaymentStatus.PAID) {
+    throw new ApiError(400, "Invoice is already paid.");
+  }
+
+  const balances = computeInvoiceBalances(invoice);
+  const authorName = userDisplayName(currentUser) || "Accounting Staff";
+  const matterName = invoice.case?.title || null;
+
+  await notificationService.notifyCaseManagers(invoice.caseId, {
+    eventType: "CASE_MESSAGE",
+    subject: `Payment reminder: ${invoice.invoiceNumber}`,
+    relatedRecordType: "Invoice",
+    relatedRecordId: invoiceId,
+    templateData: {
+      title: "Payment Reminder",
+      message: `${authorName} sent a payment reminder for invoice ${invoice.invoiceNumber}. Outstanding: $${Number(balances.openBalance || 0).toFixed(2)}.`,
+      kind: "PAYMENT_REMINDER",
+      caseNumber: invoice.case?.caseNumber || null,
+      matter: matterName,
+      invoiceNumber: invoice.invoiceNumber,
+      href: `/case-manager/billing/payment-tracking?invoice=${invoiceId}`,
+    },
+  });
+
+  await financeActivityService.appendFinanceActivity({
+    action: "PAYMENT_REMINDER_SENT",
+    actingUser: currentUser,
+    caseId: invoice.caseId,
+    caseNumber: invoice.case?.caseNumber || null,
+    matterName,
+    invoiceId: invoice.id,
+    invoiceNumber: invoice.invoiceNumber,
+    previousValue: invoice.paymentStatus,
+    newValue: invoice.paymentStatus,
+    reason: `Payment reminder sent. Outstanding $${Number(balances.openBalance || 0).toFixed(2)}.`,
+  });
+
+  const managers = await prisma.caseParticipant.findMany({
+    where: {
+      caseId: invoice.caseId,
+      role: "CASE_MANAGER",
+      accessStatus: "ACTIVE",
+    },
+    select: { userId: true },
+  });
+
+  return {
+    sent: true,
+    invoiceId,
+    notifiedUserIds: managers.map((m) => m.userId).filter(Boolean),
+  };
 };
 
 const getQuickBooksSyncLogs = async (query, currentUser) => {
@@ -3828,6 +4228,7 @@ module.exports = {
   getPaymentTracking,
   updateInvoicePaymentStatus,
   syncInvoiceToQuickBooks,
+  sendInvoicePaymentReminder,
   getQuickBooksSyncLogs,
   retryQuickBooksSync,
   generateNeutralPaymentStatement,

@@ -9,6 +9,7 @@ const {
   timesheetsListQuerySchema,
   caseIdParamSchema,
   contactCaseManagerSchema,
+  financeActivityListQuerySchema,
 } = require("../validations/accounting.validation");
 
 const router = express.Router();
@@ -39,6 +40,12 @@ router.get(
   "/timesheets",
   validate(timesheetsListQuerySchema, "query"),
   accountingController.listTimesheets,
+);
+
+router.get(
+  "/finance-activity",
+  validate(financeActivityListQuerySchema, "query"),
+  accountingController.listFinanceActivity,
 );
 
 module.exports = router;

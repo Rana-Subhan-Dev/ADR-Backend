@@ -16,6 +16,7 @@ const {
   lawyerDashboardQuerySchema,
   caseManagerDashboardQuerySchema,
   clientDashboardQuerySchema,
+  accountingDashboardQuerySchema,
 } = require("../validations/dashboard.validation");
 
 const router = express.Router();
@@ -55,6 +56,14 @@ router.get(
   requireInternalRole(RoleName.CLIENT),
   validate(clientDashboardQuerySchema, "query"),
   dashboardController.getClientDashboard,
+);
+
+router.get(
+  "/accounting",
+  requirePermission(PermissionModule.BILLING, PermissionAction.VIEW),
+  requireInternalRole(RoleName.ACCOUNTING_STAFF, RoleName.SUPER_ADMIN),
+  validate(accountingDashboardQuerySchema, "query"),
+  dashboardController.getAccountingDashboard,
 );
 
 module.exports = router;

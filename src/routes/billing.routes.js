@@ -204,6 +204,13 @@ router.post(
   controller.syncInvoiceToQuickBooks,
 );
 
+router.post(
+  "/invoices/:invoiceId/send-reminder",
+  requirePermission(PermissionModule.BILLING, PermissionAction.EDIT),
+  validate(validation.invoiceIdParamSchema, "params"),
+  controller.sendInvoicePaymentReminder,
+);
+
 router.get(
   "/quickbooks/sync-logs",
   requireInternalRole(

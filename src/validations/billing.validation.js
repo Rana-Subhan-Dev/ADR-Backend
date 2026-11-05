@@ -471,18 +471,27 @@ const listPaymentsSchema = Joi.object({
   search: Joi.string().trim().max(100).allow("").optional(),
   caseId: Joi.string().uuid().optional(),
   invoiceId: Joi.string().uuid().optional(),
+  payerCasePartyId: Joi.string().uuid().optional(),
   paymentStatus: Joi.string()
-    .valid(...Object.values(PaymentStatus))
+    .valid(...Object.values(PaymentStatus), "OVERDUE")
     .optional(),
   invoiceStatus: Joi.string()
     .valid(...Object.values(InvoiceStatus))
+    .optional(),
+  quickBooksSyncStatus: Joi.string()
+    .valid(...Object.values(IntegrationSyncStatus), "NOT_SYNCED")
     .optional(),
   agingBucket: Joi.string()
     .valid("current", "1-30", "31-60", "61-90", "90+")
     .optional(),
   overdueOnly: Joi.boolean().optional(),
+  pastDue: Joi.boolean().optional(),
+  dateRange: Joi.string().valid("next30", "next60", "overdue").optional(),
+  dueDateFrom: Joi.date().iso().optional(),
+  dueDateTo: Joi.date().iso().optional(),
   fromDate: Joi.date().iso().optional(),
   toDate: Joi.date().iso().optional(),
+  format: Joi.string().valid("json", "csv").optional(),
   sortBy: Joi.string()
     .valid("paymentDate", "createdAt", "amount", "dueDate", "invoiceDate")
     .default("dueDate"),

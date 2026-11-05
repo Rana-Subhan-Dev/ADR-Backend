@@ -44,9 +44,26 @@ const contactCaseManagerSchema = Joi.object({
   message: Joi.string().trim().min(1).max(5000).required(),
 });
 
+const financeActivityListQuerySchema = Joi.object({
+  search: Joi.string().trim().max(255).allow("").optional(),
+  action: Joi.string().trim().max(100).optional(),
+  actingUserId: Joi.alternatives()
+    .try(Joi.string().uuid(), Joi.string().valid("SYSTEM"))
+    .optional(),
+  caseId: Joi.string().uuid().optional(),
+  invoiceId: Joi.string().uuid().optional(),
+  timesheetId: Joi.string().uuid().optional(),
+  dateRange: Joi.string().valid("7", "30", "90", "365", 7, 30, 90, 365).optional(),
+  dateFrom: Joi.date().iso().optional(),
+  dateTo: Joi.date().iso().optional(),
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(100).default(10),
+});
+
 module.exports = {
   caseFinancialsListQuerySchema,
   timesheetsListQuerySchema,
   caseIdParamSchema,
   contactCaseManagerSchema,
+  financeActivityListQuerySchema,
 };

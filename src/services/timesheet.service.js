@@ -2,6 +2,7 @@ const prisma = require("../config/prisma");
 const { runTransaction } = require("../config/prisma");
 const timesheetRepository = require("../repositories/timesheet.repository");
 const caseService = require("./case.service");
+const financeActivityService = require("./financeActivity.service");
 const ApiError = require("../utils/apiError");
 const { BillingExpensesPolicy } = require("@prisma/client");
 const {
@@ -502,6 +503,19 @@ const reviewTimesheet = async (caseId, timesheetId, data, currentUser) => {
       { status: updated.status, approvalStatus: updated.approvalStatus },
     );
     return decorateTimesheet(await timesheetRepository.findById(timesheetId, tx));
+  }).then(async (result) => {
+    await financeActivityService.appendFinanceActivity({
+      action: approved ? "TIMESHEET_APPROVED" : "TIMESHEET_REJECTED",
+      actingUser: currentUser,
+      caseId,
+      caseNumber: timesheet.case?.caseNumber || null,
+      matterName: timesheet.case?.title || null,
+      timesheetId,
+      previousValue: "SUBMITTED",
+      newValue: approved ? "APPROVED" : "REJECTED",
+      reason: approved ? null : data.rejectionComment || null,
+    });
+    return result;
   });
 };
 
