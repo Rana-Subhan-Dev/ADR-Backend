@@ -1,6 +1,7 @@
 const prisma = require("../config/prisma");
 const ApiError = require("../utils/apiError");
 const { RoleName } = require("../constants/auth.constants");
+const { NEUTRAL_READINESS_LABELS } = require("../constants/case.constants");
 const { accessibleCaseWhere } = require("../utils/caseAccess");
 
 /**
@@ -1230,10 +1231,359 @@ const getAccountingDashboard = async (query, currentUser) => {
   };
 };
 
+const DEFAULT_NEUTRAL_HEARINGS_LIMIT = 5;
+const DEFAULT_NEUTRAL_CASES_LIMIT = 10;
+const NEUTRAL_NEW_DOCUMENT_DAYS = 30;
+
+const HEARING_TYPE_LABELS = {
+  MEDIATION_SESSION: "Mediation Session",
+  ARBITRATION_HEARING: "Arbitration Hearing",
+  STATUS_CONFERENCE: "Status Conference",
+  CUSTOM: "Custom",
+};
+
+const neutralDocumentVisibilityOr = (currentUser) => [
+  { uploadedByUserId: currentUser.id },
+  {
+    visibility: "ALL_AUTHORIZED_PARTICIPANTS",
+    case: {
+      participants: {
+        some: { userId: currentUser.id, accessStatus: "ACTIVE" },
+      },
+    },
+  },
+  {
+    visibility: "NEUTRAL_ONLY",
+    case: {
+      participants: {
+        some: {
+          userId: currentUser.id,
+          role: "NEUTRAL",
+          accessStatus: "ACTIVE",
+        },
+      },
+    },
+  },
+  {
+    visibility: "SPECIFIC_PARTY_LAWYER_CLIENT",
+    accessGrants: {
+      some: {
+        caseParticipant: {
+          userId: currentUser.id,
+          accessStatus: "ACTIVE",
+        },
+      },
+    },
+  },
+];
+
+const mapNeutralUpcomingHearing = (row) => {
+  const participants = row.case?.participants || [];
+  const caseManager = participants.find((p) => p.role === "CASE_MANAGER");
+  return {
+    id: row.id,
+    caseId: row.caseId,
+    caseNumber: row.case?.caseNumber ?? null,
+    caseTitle: row.case?.title ?? null,
+    title: row.title,
+    hearingType: row.type ?? null,
+    hearingTypeLabel: row.type
+      ? HEARING_TYPE_LABELS[row.type] || row.type
+      : null,
+    hearingDate: row.hearingDate,
+    durationMinutes: row.durationMinutes ?? null,
+    timezone: row.timezone ?? null,
+    hearingStatus: row.hearingStatus,
+    format: row.format,
+    zoomJoinUrl: row.zoomJoinUrl ?? null,
+    zoomStatus: row.zoomStatus ?? null,
+    caseManagerName: displayName(caseManager?.user),
+    caseManagerEmail: caseManager?.user?.email || null,
+  };
+};
+
+const neutralUpcomingHearings = async (currentUser, limit) => {
+  const now = new Date();
+  const scope = caseScope(currentUser);
+  const rows = await prisma.hearing.findMany({
+    where: {
+      hearingStatus: { notIn: ["CANCELLED"] },
+      hearingDate: { gte: now },
+      ...(Object.keys(scope).length && { case: scope }),
+    },
+    orderBy: [{ hearingDate: "asc" }, { id: "asc" }],
+    take: limit,
+    select: {
+      id: true,
+      caseId: true,
+      title: true,
+      type: true,
+      hearingDate: true,
+      durationMinutes: true,
+      timezone: true,
+      hearingStatus: true,
+      format: true,
+      zoomJoinUrl: true,
+      zoomStatus: true,
+      case: {
+        select: {
+          caseNumber: true,
+          title: true,
+          participants: {
+            where: {
+              accessStatus: "ACTIVE",
+              role: "CASE_MANAGER",
+            },
+            select: {
+              role: true,
+              user: {
+                select: { firstName: true, lastName: true, email: true },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  return rows.map(mapNeutralUpcomingHearing);
+};
+
+const mapNeutralCalendarHearing = (row) => ({
+  id: row.id,
+  caseId: row.caseId,
+  caseNumber: row.case?.caseNumber ?? null,
+  caseTitle: row.case?.title ?? null,
+  title: row.title,
+  hearingDate: row.hearingDate,
+  hearingStatus: row.hearingStatus,
+  format: row.format,
+});
+
+const neutralCalendarHearings = async (currentUser, from, to) => {
+  const scope = caseScope(currentUser);
+  const rows = await prisma.hearing.findMany({
+    where: {
+      hearingStatus: { notIn: ["CANCELLED"] },
+      hearingDate: { gte: from, lte: to },
+      ...(Object.keys(scope).length && { case: scope }),
+    },
+    orderBy: [{ hearingDate: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      caseId: true,
+      title: true,
+      hearingDate: true,
+      hearingStatus: true,
+      format: true,
+      case: { select: { caseNumber: true, title: true } },
+    },
+  });
+  return rows.map(mapNeutralCalendarHearing);
+};
+
+const neutralAssignedCases = async (currentUser, limit) => {
+  const scope = caseScope(currentUser);
+  const now = new Date();
+  const rows = await prisma.case.findMany({
+    where: Object.keys(scope).length ? scope : {},
+    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+    take: limit,
+    select: {
+      id: true,
+      caseNumber: true,
+      title: true,
+      caseType: true,
+      lifecycleStatus: true,
+      disputeCategory: { select: { name: true } },
+      _count: { select: { parties: true } },
+      participants: {
+        where: {
+          accessStatus: "ACTIVE",
+          role: "CASE_MANAGER",
+        },
+        select: {
+          role: true,
+          user: {
+            select: { firstName: true, lastName: true, email: true },
+          },
+        },
+      },
+      hearings: {
+        where: {
+          hearingStatus: { notIn: ["CANCELLED"] },
+          hearingDate: { gte: now },
+        },
+        orderBy: [{ hearingDate: "asc" }],
+        take: 1,
+        select: { hearingDate: true },
+      },
+    },
+  });
+
+  return rows.map((row) => {
+    const caseManager = (row.participants || []).find(
+      (p) => p.role === "CASE_MANAGER",
+    );
+    return {
+      id: row.id,
+      caseNumber: row.caseNumber,
+      title: row.title,
+      caseType: row.caseType,
+      disputeType: row.disputeCategory?.name || null,
+      lifecycleStatus: row.lifecycleStatus,
+      caseManagerName: displayName(caseManager?.user),
+      partiesCount: row._count?.parties ?? 0,
+      nextHearingDate: row.hearings?.[0]?.hearingDate || null,
+    };
+  });
+};
+
+const countNeutralVisibleDocuments = async (currentUser, extraWhere = {}) => {
+  const scope = caseScope(currentUser);
+  return prisma.document.count({
+    where: {
+      deletedAt: null,
+      ...(Object.keys(scope).length ? { case: scope } : {}),
+      OR: neutralDocumentVisibilityOr(currentUser),
+      ...extraWhere,
+    },
+  });
+};
+
+const neutralDocumentAlerts = async (currentUser) => {
+  const scope = caseScope(currentUser);
+  const now = new Date();
+  const since = new Date(
+    now.getTime() - NEUTRAL_NEW_DOCUMENT_DAYS * 24 * 60 * 60 * 1000,
+  );
+
+  const [newDocumentsCount, awaitingReviewCount, readinessRows] =
+    await Promise.all([
+      countNeutralVisibleDocuments(currentUser, {
+        uploadedByUserId: { not: currentUser.id },
+        createdAt: { gte: since },
+        NOT: {
+          accessLogs: {
+            some: {
+              accessedByUserId: currentUser.id,
+              action: "VIEWED",
+            },
+          },
+        },
+      }),
+      countNeutralVisibleDocuments(currentUser, {
+        reviewStatus: "PENDING_REVIEW",
+      }),
+      prisma.checklistItem.findMany({
+        where: {
+          status: { in: ["PENDING", "IN_PROGRESS"] },
+          label: { in: [...NEUTRAL_READINESS_LABELS] },
+          ...(Object.keys(scope).length ? { case: scope } : {}),
+        },
+        select: {
+          label: true,
+          updatedAt: true,
+          case: {
+            select: {
+              hearings: {
+                where: {
+                  hearingStatus: { notIn: ["CANCELLED"] },
+                  hearingDate: { gte: now },
+                },
+                take: 1,
+                select: { id: true },
+              },
+            },
+          },
+        },
+        orderBy: [{ updatedAt: "desc" }],
+        take: 50,
+      }),
+    ]);
+
+  const alerts = [];
+
+  if (newDocumentsCount > 0) {
+    alerts.push({
+      id: "new-documents",
+      kind: "NEW_DOCUMENTS",
+      title: `${newDocumentsCount} new document${newDocumentsCount === 1 ? "" : "s"} shared with you`,
+      count: newDocumentsCount,
+      linkLabel: "Review Documents",
+      hrefHint: "documents",
+    });
+  }
+
+  if (awaitingReviewCount > 0) {
+    alerts.push({
+      id: "awaiting-review",
+      kind: "AWAITING_REVIEW",
+      title: `${awaitingReviewCount} document${awaitingReviewCount === 1 ? "" : "s"} awaiting review`,
+      count: awaitingReviewCount,
+      linkLabel: "View Pending",
+      hrefHint: "documentsPending",
+    });
+  }
+
+  const preferred = [];
+  const fallback = [];
+  const seen = new Set();
+  for (const row of readinessRows) {
+    if (!row.label || seen.has(row.label)) continue;
+    seen.add(row.label);
+    if (row.case?.hearings?.length) preferred.push(row.label);
+    else fallback.push(row.label);
+  }
+  const readinessItems = [...preferred, ...fallback].slice(0, 3);
+  if (readinessItems.length > 0) {
+    alerts.push({
+      id: "readiness-items",
+      kind: "READINESS_ITEMS",
+      title: "Upcoming Readiness Items",
+      items: readinessItems,
+      linkLabel: "Review Documents",
+      hrefHint: "documents",
+    });
+  }
+
+  return alerts;
+};
+
+const getNeutralDashboard = async (query, currentUser) => {
+  if (currentUser?.role?.name !== RoleName.NEUTRAL) {
+    throw new ApiError(
+      403,
+      "Neutral dashboard is only available to NEUTRAL users.",
+    );
+  }
+
+  const hearingsLimit =
+    Number(query.hearingsLimit) || DEFAULT_NEUTRAL_HEARINGS_LIMIT;
+  const casesLimit = Number(query.casesLimit) || DEFAULT_NEUTRAL_CASES_LIMIT;
+  const { from, to } = resolveCalendarRange(query);
+
+  const [upcomingHearingsList, documentAlerts, calendarHearings, assignedCases] =
+    await Promise.all([
+      neutralUpcomingHearings(currentUser, hearingsLimit),
+      neutralDocumentAlerts(currentUser),
+      neutralCalendarHearings(currentUser, from, to),
+      neutralAssignedCases(currentUser, casesLimit),
+    ]);
+
+  return {
+    upcomingHearings: upcomingHearingsList,
+    documentAlerts,
+    calendarHearings,
+    assignedCases,
+  };
+};
+
 module.exports = {
   getOverview,
   getLawyerDashboard,
   getCaseManagerDashboard,
   getClientDashboard,
   getAccountingDashboard,
+  getNeutralDashboard,
 };

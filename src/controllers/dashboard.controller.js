@@ -62,10 +62,23 @@ const getAccountingDashboard = asyncHandler(async (req, res) =>
     ),
 );
 
+const getNeutralDashboard = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await dashboardService.getNeutralDashboard(req.query, req.user),
+        "Neutral dashboard fetched successfully.",
+      ),
+    ),
+);
+
 module.exports = {
   getOverview,
   getLawyerDashboard,
   getCaseManagerDashboard,
   getClientDashboard,
   getAccountingDashboard,
+  getNeutralDashboard,
 };

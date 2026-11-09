@@ -93,7 +93,13 @@ const CASE_SELECT = {
       role: true,
       isPrimary: true,
       user: {
-        select: { id: true, firstName: true, lastName: true, email: true },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          phone: true,
+        },
       },
     },
   },

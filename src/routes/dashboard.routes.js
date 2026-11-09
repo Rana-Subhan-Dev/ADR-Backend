@@ -17,6 +17,7 @@ const {
   caseManagerDashboardQuerySchema,
   clientDashboardQuerySchema,
   accountingDashboardQuerySchema,
+  neutralDashboardQuerySchema,
 } = require("../validations/dashboard.validation");
 
 const router = express.Router();
@@ -64,6 +65,14 @@ router.get(
   requireInternalRole(RoleName.ACCOUNTING_STAFF, RoleName.SUPER_ADMIN),
   validate(accountingDashboardQuerySchema, "query"),
   dashboardController.getAccountingDashboard,
+);
+
+router.get(
+  "/neutral",
+  requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
+  requireInternalRole(RoleName.NEUTRAL),
+  validate(neutralDashboardQuerySchema, "query"),
+  dashboardController.getNeutralDashboard,
 );
 
 module.exports = router;

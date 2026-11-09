@@ -14,7 +14,10 @@ const {
   CLOSURE_CHECKLIST_LABELS,
   CLOSURE_DERIVED_LABELS,
   CLOSABLE_STATUSES,
+  NEUTRAL_READINESS_LABELS,
 } = require("../constants/case.constants");
+const { RoleName } = require("../constants/auth.constants");
+const readinessChecklistService = require("./readinessChecklist.service");
 
 const formatMoney = (value) => {
   if (value === null || value === undefined) return null;
@@ -93,6 +96,39 @@ const HEARING_TYPE_LABELS = {
 };
 
 const RECENT_DOCUMENT_DAYS = 30;
+const NEUTRAL_OVERVIEW_PARTIES_LIMIT = 10;
+const NEUTRAL_OVERVIEW_DOCUMENTS_RECENT_LIMIT = 3;
+const NEUTRAL_OVERVIEW_HEARINGS_LIMIT = 3;
+const NEUTRAL_OVERVIEW_READINESS_LIMIT = 10;
+const NEUTRAL_OVERVIEW_UPDATES_LIMIT = 4;
+
+const neutralDocumentVisibilityOr = (currentUser) => [
+  { uploadedByUserId: currentUser.id },
+  { visibility: "ALL_AUTHORIZED_PARTICIPANTS" },
+  {
+    visibility: "NEUTRAL_ONLY",
+    case: {
+      participants: {
+        some: {
+          userId: currentUser.id,
+          role: "NEUTRAL",
+          accessStatus: "ACTIVE",
+        },
+      },
+    },
+  },
+  {
+    visibility: "SPECIFIC_PARTY_LAWYER_CLIENT",
+    accessGrants: {
+      some: {
+        caseParticipant: {
+          userId: currentUser.id,
+          accessStatus: "ACTIVE",
+        },
+      },
+    },
+  },
+];
 
 const pickNextHearing = (hearings = []) => {
   const now = Date.now();
@@ -139,10 +175,208 @@ const invoiceOpenBalance = (invoice) => {
   return roundMoney(Math.max(0, amountDue - paid - credited));
 };
 
-const buildCaseOverviewSummary = async (caseId) => {
+const buildNeutralOverviewParties = async (caseId) => {
+  const parties = await prisma.caseParty.findMany({
+    where: { caseId },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      organizationName: true,
+      side: true,
+      representations: {
+        select: {
+          id: true,
+          attorney: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              lawFirm: { select: { name: true } },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  const rows = [];
+  for (const party of parties) {
+    const partyName = partyDisplayName(party);
+    const representations = party.representations || [];
+    if (!representations.length) {
+      rows.push({
+        id: party.id,
+        casePartyId: party.id,
+        partyName,
+        side: party.side,
+        lawFirmName: null,
+        attorneyName: null,
+        attorneyId: null,
+      });
+      continue;
+    }
+    for (const representation of representations) {
+      rows.push({
+        id: representation.id,
+        casePartyId: party.id,
+        partyName,
+        side: party.side,
+        lawFirmName: representation.attorney?.lawFirm?.name || null,
+        attorneyName: userDisplayName(representation.attorney),
+        attorneyId: representation.attorney?.id || null,
+      });
+    }
+  }
+
+  return rows.slice(0, NEUTRAL_OVERVIEW_PARTIES_LIMIT);
+};
+
+const buildNeutralOverviewDocuments = async (caseId, currentUser) => {
+  const visibilityOr = neutralDocumentVisibilityOr(currentUser);
+  const where = {
+    caseId,
+    deletedAt: null,
+    OR: visibilityOr,
+  };
+
+  const [totalDocuments, recentRows] = await Promise.all([
+    prisma.document.count({ where }),
+    prisma.document.findMany({
+      where,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: NEUTRAL_OVERVIEW_DOCUMENTS_RECENT_LIMIT,
+      select: { id: true, name: true, createdAt: true },
+    }),
+  ]);
+
+  return {
+    totalDocuments,
+    recent: recentRows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      uploadedAt: row.createdAt,
+    })),
+  };
+};
+
+const buildNeutralOverviewUpcomingHearings = async (caseId) => {
+  const now = new Date();
+  const rows = await prisma.hearing.findMany({
+    where: {
+      caseId,
+      hearingStatus: { notIn: ["CANCELLED"] },
+      hearingDate: { gte: now },
+    },
+    orderBy: [{ hearingDate: "asc" }, { id: "asc" }],
+    take: NEUTRAL_OVERVIEW_HEARINGS_LIMIT,
+    select: {
+      id: true,
+      title: true,
+      type: true,
+      hearingDate: true,
+      timezone: true,
+      hearingStatus: true,
+      format: true,
+      zoomJoinUrl: true,
+      zoomStatus: true,
+    },
+  });
+
+  return rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    hearingType: row.type ?? null,
+    hearingTypeLabel: row.type
+      ? HEARING_TYPE_LABELS[row.type] || row.type
+      : null,
+    hearingDate: row.hearingDate,
+    timezone: row.timezone ?? null,
+    hearingStatus: row.hearingStatus,
+    format: row.format,
+    zoomJoinUrl: row.zoomJoinUrl ?? null,
+    zoomStatus: row.zoomStatus ?? null,
+  }));
+};
+
+const buildNeutralOverviewReadiness = async (caseId) => {
+  await readinessChecklistService.syncDerivedReadinessChecklist(caseId);
+  const items = await prisma.checklistItem.findMany({
+    where: {
+      caseId,
+      category: "READINESS",
+      label: { in: [...NEUTRAL_READINESS_LABELS] },
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: NEUTRAL_OVERVIEW_READINESS_LIMIT,
+    select: { id: true, label: true, status: true },
+  });
+  return items.map((item) => ({
+    id: item.id,
+    label: item.label,
+    status: item.status,
+  }));
+};
+
+const buildNeutralOverviewRecentUpdates = async (caseId) => {
+  const notes = await prisma.caseNote.findMany({
+    where: {
+      caseId,
+      parentNoteId: null,
+      visibility: "ALL_PARTICIPANTS",
+      noteType: { in: ["EXTERNAL_COMMENT", "CASE_UPDATE"] },
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: NEUTRAL_OVERVIEW_UPDATES_LIMIT,
+    select: {
+      id: true,
+      body: true,
+      createdAt: true,
+      author: {
+        select: { firstName: true, lastName: true, email: true },
+      },
+    },
+  });
+
+  return notes.map((note) => ({
+    id: note.id,
+    body: note.body,
+    createdAt: note.createdAt,
+    author: note.author
+      ? {
+          firstName: note.author.firstName,
+          lastName: note.author.lastName,
+          email: note.author.email,
+        }
+      : null,
+  }));
+};
+
+const buildNeutralOverviewExtensions = async (caseId, currentUser) => {
+  const [parties, documents, upcomingHearings, readiness, recentUpdates] =
+    await Promise.all([
+      buildNeutralOverviewParties(caseId),
+      buildNeutralOverviewDocuments(caseId, currentUser),
+      buildNeutralOverviewUpcomingHearings(caseId),
+      buildNeutralOverviewReadiness(caseId),
+      buildNeutralOverviewRecentUpdates(caseId),
+    ]);
+
+  return {
+    parties,
+    documents,
+    upcomingHearings,
+    readiness,
+    recentUpdates,
+  };
+};
+
+const buildCaseOverviewSummary = async (caseId, currentUser) => {
   const recentSince = new Date(
     Date.now() - RECENT_DOCUMENT_DAYS * 24 * 60 * 60 * 1000,
   );
+  const isNeutral = currentUser?.role?.name === RoleName.NEUTRAL;
 
   const [
     totalParties,
@@ -154,6 +388,7 @@ const buildCaseOverviewSummary = async (caseId) => {
     pendingReview,
     missingDocuments,
     invoices,
+    neutralExtensions,
   ] = await Promise.all([
     prisma.caseParty.count({ where: { caseId } }),
     prisma.partyAttorneyRepresentation.findMany({
@@ -201,6 +436,9 @@ const buildCaseOverviewSummary = async (caseId) => {
         creditNotes: { select: { amount: true } },
       },
     }),
+    isNeutral
+      ? buildNeutralOverviewExtensions(caseId, currentUser)
+      : Promise.resolve(null),
   ]);
 
   let outstandingBalance = 0;
@@ -227,7 +465,7 @@ const buildCaseOverviewSummary = async (caseId) => {
     }
   }
 
-  return {
+  const overview = {
     participants: {
       totalParties,
       totalAttorneys: attorneyRows.length,
@@ -250,6 +488,23 @@ const buildCaseOverviewSummary = async (caseId) => {
       missingDocuments,
       recentlyAddedWindowDays: RECENT_DOCUMENT_DAYS,
     },
+  };
+
+  if (!neutralExtensions) {
+    return overview;
+  }
+
+  return {
+    ...overview,
+    parties: neutralExtensions.parties,
+    documents: {
+      ...overview.documents,
+      totalDocuments: neutralExtensions.documents.totalDocuments,
+      recent: neutralExtensions.documents.recent,
+    },
+    upcomingHearings: neutralExtensions.upcomingHearings,
+    readiness: neutralExtensions.readiness,
+    recentUpdates: neutralExtensions.recentUpdates,
   };
 };
 
@@ -568,7 +823,7 @@ const getCaseById = async (id, currentUser) => {
 
   await assertCaseAccess(caseData, currentUser);
 
-  const overview = await buildCaseOverviewSummary(id);
+  const overview = await buildCaseOverviewSummary(id, currentUser);
   return {
     ...caseData,
     overview,
