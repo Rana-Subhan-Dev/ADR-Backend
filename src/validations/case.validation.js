@@ -89,6 +89,8 @@ const getCasesSchema = Joi.object({
   assignedNeutralId: Joi.string().uuid().optional(),
   hearingDateFrom: Joi.date().iso().optional(),
   hearingDateTo: Joi.date().iso().optional(),
+  hasNextHearing: Joi.boolean().optional(),
+  hearingUnscheduled: Joi.boolean().optional(),
   caseStatus: Joi.string()
     .valid("Inquiry", "Case", "Post-hearing", "Closed", "inquiry", "case", "post-hearing", "closed")
     .optional(),
@@ -162,8 +164,15 @@ const messageAllPartiesSchema = Joi.object({
     .unique()
     .min(1)
     .required(),
-  message: Joi.string().trim().min(1).max(10000).required(),
-});
+  // FE Neutral portal sends `body`; `message` kept as alias
+  body: Joi.string().trim().min(1).max(10000).optional(),
+  message: Joi.string().trim().min(1).max(10000).optional(),
+  subject: Joi.string().trim().max(500).allow("", null).optional(),
+})
+  .or("body", "message")
+  .messages({
+    "object.missing": '"body" or "message" is required',
+  });
 
 module.exports = {
   createCaseSchema,

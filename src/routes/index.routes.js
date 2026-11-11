@@ -18,6 +18,8 @@ const notificationRoutes = require("./notification.routes");
 const reportRoutes = require("./report.routes");
 const timelineChecklistRoutes = require("./timelineChecklist.routes");
 const timesheetRoutes = require("./timesheet.routes");
+const timesheetHubRoutes = require("./timesheetHub.routes");
+const practiceLibraryRoutes = require("./practiceLibrary.routes");
 const docusignRoutes = require("./docusign.routes");
 const billingRoutes = require("./billing.routes");
 const adminRoutes = require("./admin.routes");
@@ -73,6 +75,14 @@ const defaultRoutes = [
   {
     path: "/documents",
     route: documentHubRoutes,
+  },
+  {
+    path: "/timesheets",
+    route: timesheetHubRoutes,
+  },
+  {
+    path: "/practice-library",
+    route: practiceLibraryRoutes,
   },
   {
     path: "/participants",

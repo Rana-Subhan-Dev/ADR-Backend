@@ -846,6 +846,8 @@ const getCases = async (query, currentUser) => {
     assignedNeutralId,
     hearingDateFrom,
     hearingDateTo,
+    hasNextHearing,
+    hearingUnscheduled,
     caseStatus,
     stageId,
     stageName,
@@ -1002,6 +1004,33 @@ const getCases = async (query, currentUser) => {
     });
   }
 
+  const unscheduledRequested =
+    hearingUnscheduled === true ||
+    hearingUnscheduled === "true" ||
+    hasNextHearing === false ||
+    hasNextHearing === "false";
+  const scheduledRequested =
+    hasNextHearing === true || hasNextHearing === "true";
+  if (unscheduledRequested) {
+    and.push({
+      hearings: {
+        none: {
+          hearingStatus: { notIn: ["CANCELLED"] },
+          hearingDate: { gte: new Date() },
+        },
+      },
+    });
+  } else if (scheduledRequested) {
+    and.push({
+      hearings: {
+        some: {
+          hearingStatus: { notIn: ["CANCELLED"] },
+          hearingDate: { gte: new Date() },
+        },
+      },
+    });
+  }
+
   if (caseStatus) {
     const normalized = String(caseStatus).toLowerCase();
     if (normalized === "closed") {
@@ -1056,7 +1085,83 @@ const getCases = async (query, currentUser) => {
   }
 
   const skip = (page - 1) * limit;
-  const orderBy = { [sortBy]: sortOrder };
+  const inMemorySortFields = new Set([
+    CASE_SORT_FIELDS.MATTER_NAME,
+    CASE_SORT_FIELDS.CASE_MANAGER,
+    CASE_SORT_FIELDS.NEXT_HEARING,
+  ]);
+  const prismaSortBy =
+    sortBy === CASE_SORT_FIELDS.MATTER_NAME
+      ? CASE_SORT_FIELDS.TITLE
+      : inMemorySortFields.has(sortBy)
+        ? CASE_SORT_FIELDS.UPDATED_AT
+        : sortBy;
+  const orderBy = { [prismaSortBy]: sortOrder };
+
+  if (inMemorySortFields.has(sortBy)) {
+    const counted = await caseRepository.getCases({
+      skip: 0,
+      take: 1,
+      where,
+      orderBy,
+    });
+    const fullTotal = counted.total;
+    const { cases } = await caseRepository.getCases({
+      skip: 0,
+      take: Math.min(Math.max(fullTotal, limit), 500),
+      where,
+      orderBy,
+    });
+    const mapped = cases.map(mapCase);
+    const direction = sortOrder === "asc" ? 1 : -1;
+    mapped.sort((a, b) => {
+      if (sortBy === CASE_SORT_FIELDS.CASE_MANAGER) {
+        const an = [
+          a.caseManager?.lastName,
+          a.caseManager?.firstName,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        const bn = [
+          b.caseManager?.lastName,
+          b.caseManager?.firstName,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return an.localeCompare(bn) * direction;
+      }
+      if (sortBy === CASE_SORT_FIELDS.NEXT_HEARING) {
+        const at = a.nextHearing?.hearingDate
+          ? new Date(a.nextHearing.hearingDate).getTime()
+          : null;
+        const bt = b.nextHearing?.hearingDate
+          ? new Date(b.nextHearing.hearingDate).getTime()
+          : null;
+        if (at == null && bt == null) return 0;
+        if (at == null) return 1;
+        if (bt == null) return -1;
+        return (at - bt) * direction;
+      }
+      const an = (a.matterName || a.title || "").toLowerCase();
+      const bn = (b.matterName || b.title || "").toLowerCase();
+      return an.localeCompare(bn) * direction;
+    });
+    const pageCases = mapped.slice(skip, skip + limit);
+    const totalPages = Math.ceil(fullTotal / limit) || 0;
+    return {
+      cases: pageCases,
+      pagination: {
+        page,
+        limit,
+        total: fullTotal,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPreviousPage: page > 1,
+      },
+    };
+  }
 
   const { cases, total } = await caseRepository.getCases({
     skip,
@@ -1422,9 +1527,15 @@ const messageAllParties = async (caseId, payload, currentUser) => {
   if (!existingCase) throw new ApiError(404, "Case not found.");
   await assertCaseAccess(existingCase, currentUser);
 
-  const { recipientParticipantIds, message } = payload;
+  const { recipientParticipantIds } = payload;
+  const message = String(payload.body || payload.message || "").trim();
+  if (!message) {
+    throw new ApiError(400, "body or message is required.");
+  }
   const senderName = userDisplayName(currentUser);
-  const notificationSubject = `New message for case ${existingCase.caseNumber}`;
+  const notificationSubject =
+    String(payload.subject || "").trim() ||
+    `New message for case ${existingCase.caseNumber}`;
 
   return runTransaction(async (tx) => {
     const participants = await caseRepository.findActiveCaseParticipantsByIds(
@@ -1467,6 +1578,7 @@ const messageAllParties = async (caseId, payload, currentUser) => {
           templateData: {
             title: notificationSubject,
             message,
+            body: message,
             kind: "CASE_MESSAGE",
             caseId,
             caseNumber: existingCase.caseNumber,

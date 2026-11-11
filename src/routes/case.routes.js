@@ -1,6 +1,7 @@
 const express = require("express");
 
 const caseController = require("../controllers/case.controller");
+const conflictController = require("../controllers/conflict.controller");
 const auth = require("../middlewares/auth.middleware");
 const validate = require("../middlewares/validate.middleware");
 const {
@@ -93,6 +94,20 @@ router.post(
   validate(caseIdSchema, "params"),
   validate(messageAllPartiesSchema),
   caseController.messageAllParties,
+);
+
+router.get(
+  "/:id/conflicts",
+  requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
+  validate(caseIdSchema, "params"),
+  conflictController.getConflicts,
+);
+
+router.get(
+  "/:id/conflicts/export",
+  requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
+  validate(caseIdSchema, "params"),
+  conflictController.exportConflicts,
 );
 
 router.get(

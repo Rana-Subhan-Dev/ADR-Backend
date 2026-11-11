@@ -119,10 +119,26 @@ const getTimeline = async (caseId, query, currentUser) => {
   await caseService.getCaseById(caseId, currentUser);
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 20;
+  const relatedRecordType = query.relatedRecordType
+    ? String(query.relatedRecordType).toUpperCase()
+    : null;
+  const relatedTypeMap = {
+    DOCUMENT: "Document",
+    HEARING: "Hearing",
+    NOTE: "Note",
+    TIMESHEET: "Timesheet",
+  };
   const where = {
     caseId,
     ...(query.eventType && { eventType: query.eventType }),
     ...(query.actorUserId && { actorUserId: query.actorUserId }),
+    ...(relatedRecordType && {
+      relatedRecordType:
+        relatedTypeMap[relatedRecordType] || query.relatedRecordType,
+    }),
+    ...(query.search && {
+      summary: { contains: query.search, mode: "insensitive" },
+    }),
     ...(query.from || query.to
       ? {
           timestamp: {

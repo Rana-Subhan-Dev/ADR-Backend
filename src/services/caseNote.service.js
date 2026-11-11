@@ -9,6 +9,7 @@ const {
 
 const managerRoles = ["SUPER_ADMIN", "ADMIN_LEADERSHIP", "CASE_MANAGER"];
 const isInternal = (user) => managerRoles.includes(user.role?.name);
+const isNeutral = (user) => user?.role?.name === "NEUTRAL";
 
 const roleDisplayLabel = (roleName) => {
   if (!roleName) return null;
@@ -204,11 +205,16 @@ const assertNoteAccess = async (caseId, noteId, currentUser) => {
   const note = await caseNoteRepository.findCaseNoteById(noteId);
   if (!note || note.caseId !== caseId)
     throw new ApiError(404, "Case note not found.");
-  if (
-    !isInternal(currentUser) &&
-    (note.visibility !== "ALL_PARTICIPANTS" ||
-      note.noteType === "INTERNAL_NOTE")
-  ) {
+  if (isInternal(currentUser)) return note;
+  const isOwnPrivate =
+    isNeutral(currentUser) &&
+    note.noteType === "INTERNAL_NOTE" &&
+    note.visibility === "INTERNAL_ONLY" &&
+    note.authorUserId === currentUser.id;
+  const isShared =
+    note.visibility === "ALL_PARTICIPANTS" &&
+    note.noteType !== "INTERNAL_NOTE";
+  if (!isOwnPrivate && !isShared) {
     throw new ApiError(403, "You do not have access to this case note.");
   }
   return note;
@@ -273,13 +279,19 @@ const createCaseNote = async (caseId, data, currentUser) => {
   const visibility = data.visibility || "INTERNAL_ONLY";
   assertSupportedVisibility(visibility);
   if (!isInternal(currentUser)) {
-    if (
-      data.noteType !== "EXTERNAL_COMMENT" ||
-      visibility !== "ALL_PARTICIPANTS"
-    ) {
+    const neutralPrivate =
+      isNeutral(currentUser) &&
+      data.noteType === "INTERNAL_NOTE" &&
+      visibility === "INTERNAL_ONLY";
+    const sharedExternal =
+      data.noteType === "EXTERNAL_COMMENT" &&
+      visibility === "ALL_PARTICIPANTS";
+    if (!neutralPrivate && !sharedExternal) {
       throw new ApiError(
         403,
-        "External users may only create shared external comments.",
+        isNeutral(currentUser)
+          ? "Neutrals may create private internal notes or shared external comments only."
+          : "External users may only create shared external comments.",
       );
     }
   }
@@ -341,14 +353,37 @@ const getCaseNotes = async (caseId, query, currentUser) => {
   }
 
   if (!isInternal(currentUser)) {
-    where.visibility = "ALL_PARTICIPANTS";
-    if (query.noteType === "INTERNAL_NOTE") {
-      throw new ApiError(403, "You do not have access to internal notes.");
-    }
-    if (query.noteType) {
-      where.noteType = query.noteType;
+    if (isNeutral(currentUser)) {
+      if (query.noteType === "INTERNAL_NOTE") {
+        where.noteType = "INTERNAL_NOTE";
+        where.visibility = "INTERNAL_ONLY";
+        where.authorUserId = currentUser.id;
+      } else if (query.noteType) {
+        where.visibility = "ALL_PARTICIPANTS";
+        where.noteType = query.noteType;
+      } else {
+        where.OR = [
+          {
+            visibility: "ALL_PARTICIPANTS",
+            noteType: { in: ["CASE_UPDATE", "EXTERNAL_COMMENT"] },
+          },
+          {
+            noteType: "INTERNAL_NOTE",
+            visibility: "INTERNAL_ONLY",
+            authorUserId: currentUser.id,
+          },
+        ];
+      }
     } else {
-      where.noteType = { in: ["CASE_UPDATE", "EXTERNAL_COMMENT"] };
+      where.visibility = "ALL_PARTICIPANTS";
+      if (query.noteType === "INTERNAL_NOTE") {
+        throw new ApiError(403, "You do not have access to internal notes.");
+      }
+      if (query.noteType) {
+        where.noteType = query.noteType;
+      } else {
+        where.noteType = { in: ["CASE_UPDATE", "EXTERNAL_COMMENT"] };
+      }
     }
   }
 
@@ -383,7 +418,15 @@ const updateCaseNote = async (caseId, noteId, data, currentUser) => {
     );
   assertCanManage(note, currentUser);
   const visibility = data.visibility || note.visibility;
-  if (!isInternal(currentUser) && visibility !== "ALL_PARTICIPANTS")
+  if (
+    !isInternal(currentUser) &&
+    !(
+      isNeutral(currentUser) &&
+      note.noteType === "INTERNAL_NOTE" &&
+      visibility === "INTERNAL_ONLY"
+    ) &&
+    visibility !== "ALL_PARTICIPANTS"
+  )
     throw new ApiError(
       403,
       "External comments must remain shared with participants.",

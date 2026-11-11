@@ -7,7 +7,11 @@ const {
   PermissionModule,
   PermissionAction,
 } = require("../constants/permission.constants");
-const { listDocumentsHubSchema } = require("../validations/document.validation");
+const {
+  listDocumentsHubSchema,
+  hubDocumentIdSchema,
+  getDocumentSchema,
+} = require("../validations/document.validation");
 
 const router = express.Router();
 
@@ -18,6 +22,14 @@ router.get(
   requirePermission(PermissionModule.DOCUMENTS, PermissionAction.VIEW),
   validate(listDocumentsHubSchema, "query"),
   documentController.listDocumentsHub,
+);
+
+router.get(
+  "/:documentId",
+  requirePermission(PermissionModule.DOCUMENTS, PermissionAction.VIEW),
+  validate(hubDocumentIdSchema, "params"),
+  validate(getDocumentSchema, "query"),
+  documentController.getDocumentFromHub,
 );
 
 module.exports = router;

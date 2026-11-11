@@ -19,6 +19,7 @@ const {
   userIdSchema,
   updateUserSchema,
   updateMeSchema,
+  updateBioSchema,
   updateUserStatusSchema,
 } = require("../validations/user.validation");
 
@@ -33,6 +34,18 @@ router.patch(
   "/me",
   validate(updateMeSchema),
   userController.updateCurrentUser,
+);
+
+router.get("/me/bio", userController.getCurrentUserBio);
+router.put(
+  "/me/bio",
+  validate(updateBioSchema),
+  userController.updateCurrentUserBio,
+);
+router.patch(
+  "/me/bio",
+  validate(updateBioSchema),
+  userController.updateCurrentUserBio,
 );
 
 router.get(

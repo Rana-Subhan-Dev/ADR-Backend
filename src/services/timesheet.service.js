@@ -5,6 +5,8 @@ const caseService = require("./case.service");
 const financeActivityService = require("./financeActivity.service");
 const ApiError = require("../utils/apiError");
 const { BillingExpensesPolicy } = require("@prisma/client");
+const { RoleName } = require("../constants/auth.constants");
+const { accessibleCaseWhere } = require("../utils/caseAccess");
 const {
   decorateTimesheetDisplay,
   sumExpenses,
@@ -283,33 +285,65 @@ const createTimesheet = async (caseId, data, currentUser) => {
   });
 };
 
+const resolveEntryDateRange = (query) => {
+  const from =
+    query.workDateFrom || query.entryDateFrom || query.from || null;
+  const to = query.workDateTo || query.entryDateTo || query.to || null;
+  if (!from && !to) return null;
+  return {
+    ...(from && { gte: new Date(from) }),
+    ...(to && { lte: new Date(to) }),
+  };
+};
+
+const buildTimesheetListWhere = (query, currentUser, { caseId } = {}) => {
+  const entryDate = resolveEntryDateRange(query);
+  const statusFilter = {};
+  if (query.status === "APPROVED" || query.status === "REJECTED") {
+    statusFilter.approvalStatus = query.status;
+  } else if (query.status) {
+    statusFilter.status = query.status;
+  }
+  if (query.approvalStatus) {
+    statusFilter.approvalStatus = query.approvalStatus;
+  }
+
+  const scope = accessibleCaseWhere(currentUser);
+  return {
+    ...(caseId
+      ? { caseId }
+      : Object.keys(scope).length
+        ? { case: scope }
+        : {}),
+    ...(query.caseId && !caseId ? { caseId: query.caseId } : {}),
+    ...(!canAccessFinance(currentUser) && { neutralUserId: currentUser.id }),
+    ...(query.neutralUserId &&
+      canAccessFinance(currentUser) && { neutralUserId: query.neutralUserId }),
+    ...(query.hearingId && { hearingId: query.hearingId }),
+    ...(query.activityType && { activityType: query.activityType }),
+    ...statusFilter,
+    ...(entryDate ? { entryDate } : {}),
+  };
+};
+
+const buildTimesheetOrderBy = (query) => {
+  const sortBy = query.sortBy || "entryDate";
+  const sortOrder = query.sortOrder === "asc" ? "asc" : "desc";
+  return [{ [sortBy]: sortOrder }, { id: "desc" }];
+};
+
 const getTimesheets = async (caseId, query, currentUser) => {
   await caseService.getCaseById(caseId, currentUser);
   if (!canAccessFinance(currentUser))
     await assertNeutral(caseId, currentUser.id);
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 20;
-  const where = {
-    caseId,
-    ...(!canAccessFinance(currentUser) && { neutralUserId: currentUser.id }),
-    ...(query.neutralUserId &&
-      canAccessFinance(currentUser) && { neutralUserId: query.neutralUserId }),
-    ...(query.status && { status: query.status }),
-    ...(query.approvalStatus && { approvalStatus: query.approvalStatus }),
-    ...(query.activityType && { activityType: query.activityType }),
-    ...(query.from || query.to
-      ? {
-          entryDate: {
-            ...(query.from && { gte: new Date(query.from) }),
-            ...(query.to && { lte: new Date(query.to) }),
-          },
-        }
-      : {}),
-  };
+  const where = buildTimesheetListWhere(query, currentUser, { caseId });
   const [timesheets, total] = await timesheetRepository.getMany({
     where,
     skip: (page - 1) * limit,
     take: limit,
+    orderBy: buildTimesheetOrderBy(query),
   });
   return paginate(
     timesheets.map(decorateTimesheet),
@@ -317,6 +351,212 @@ const getTimesheets = async (caseId, query, currentUser) => {
     page,
     limit,
   );
+};
+
+const listTimesheetsHub = async (query, currentUser) => {
+  if (
+    currentUser?.role?.name !== RoleName.NEUTRAL &&
+    !canAccessFinance(currentUser)
+  ) {
+    throw new ApiError(403, "Timesheets hub is not available for this role.");
+  }
+  const page = Number(query.page) || 1;
+  const limit = Number(query.limit) || 20;
+  const where = buildTimesheetListWhere(query, currentUser);
+  const [timesheets, total] = await timesheetRepository.getMany({
+    where,
+    skip: (page - 1) * limit,
+    take: limit,
+    orderBy: buildTimesheetOrderBy(query),
+  });
+  return paginate(
+    timesheets.map(decorateTimesheet),
+    total,
+    page,
+    limit,
+  );
+};
+
+const resolveNeutralPaymentStatus = (timesheet) => {
+  if (
+    timesheet.status === "DRAFT" ||
+    timesheet.approvalStatus === "REJECTED"
+  ) {
+    return "NOT_AVAILABLE";
+  }
+  if (
+    timesheet.status === "SUBMITTED" &&
+    timesheet.approvalStatus === "PENDING"
+  ) {
+    return "AWAITING_APPROVAL";
+  }
+  const lineItems = timesheet.lineItems || [];
+  const activeInvoice = lineItems
+    .map((li) => li.invoice)
+    .find((inv) => inv && !["DRAFT", "VOID"].includes(inv.invoiceStatus));
+  if (!activeInvoice) {
+    return timesheet.approvalStatus === "APPROVED"
+      ? "PENDING"
+      : "NOT_AVAILABLE";
+  }
+  if (activeInvoice.paymentStatus === "PAID") return "PAID";
+  return "PENDING";
+};
+
+const getPaymentStatus = async (caseId, query, currentUser) => {
+  await caseService.getCaseById(caseId, currentUser);
+  if (currentUser?.role?.name === RoleName.NEUTRAL) {
+    await assertNeutral(caseId, currentUser.id);
+  } else if (!canAccessFinance(currentUser)) {
+    throw new ApiError(403, "Payment status is not available for this role.");
+  }
+
+  const page = Number(query.page) || 1;
+  const limit = Number(query.limit) || 20;
+  const entryDate = resolveEntryDateRange({
+    workDateFrom: query.workDateFrom,
+    workDateTo: query.workDateTo,
+  });
+
+  const rows = await prisma.neutralTimesheet.findMany({
+    where: {
+      caseId,
+      ...(currentUser?.role?.name === RoleName.NEUTRAL && {
+        neutralUserId: currentUser.id,
+      }),
+      ...(entryDate ? { entryDate } : {}),
+    },
+    orderBy: [{ entryDate: "desc" }, { id: "desc" }],
+    select: {
+      id: true,
+      caseId: true,
+      hearingId: true,
+      activityType: true,
+      hours: true,
+      entryDate: true,
+      status: true,
+      approvalStatus: true,
+      rejectionComment: true,
+      submittedAt: true,
+      reviewedAt: true,
+      hearing: { select: { id: true, title: true, hearingDate: true } },
+      case: {
+        select: {
+          caseNumber: true,
+          title: true,
+          inquiry: { select: { matterName: true } },
+        },
+      },
+      lineItems: {
+        select: {
+          id: true,
+          amount: true,
+          invoice: {
+            select: {
+              id: true,
+              invoiceNumber: true,
+              invoiceStatus: true,
+              paymentStatus: true,
+              amountDue: true,
+              payments: {
+                orderBy: { paymentDate: "desc" },
+                select: { id: true, amount: true, paymentDate: true },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  const billingConfig = await prisma.billingConfiguration.findUnique({
+    where: { caseId },
+    select: { neutralHourlyRate: true },
+  });
+  const hourlyRate = Number(billingConfig?.neutralHourlyRate || 0);
+
+  let submittedHours = 0;
+  let approvedHours = 0;
+  let pendingPaymentAmount = 0;
+  let paidAmount = 0;
+  let nextPayoutDate = null;
+
+  const mapped = rows.map((row) => {
+    const hours = Number(row.hours || 0);
+    const paymentStatus = resolveNeutralPaymentStatus(row);
+    const invoice = (row.lineItems || [])
+      .map((li) => li.invoice)
+      .find((inv) => inv && !["DRAFT", "VOID"].includes(inv.invoiceStatus));
+    const latestPayment = invoice?.payments?.[0] || null;
+    const amount =
+      Number(
+        (row.lineItems || []).find((li) => li.invoice?.id === invoice?.id)
+          ?.amount || hours * hourlyRate,
+      ) || 0;
+
+    if (row.status === "SUBMITTED" || row.approvalStatus === "APPROVED") {
+      submittedHours += hours;
+    }
+    if (row.approvalStatus === "APPROVED") {
+      approvedHours += hours;
+    }
+    if (paymentStatus === "PENDING" || paymentStatus === "AWAITING_APPROVAL") {
+      pendingPaymentAmount += amount;
+    }
+    if (paymentStatus === "PAID") {
+      paidAmount += Number(latestPayment?.amount || amount);
+    }
+    if (
+      paymentStatus === "PENDING" &&
+      invoice?.payments?.length === 0 &&
+      !nextPayoutDate
+    ) {
+      nextPayoutDate = null;
+    }
+
+    return {
+      id: row.id,
+      caseId: row.caseId,
+      caseNumber: row.case?.caseNumber || null,
+      matterName: row.case?.inquiry?.matterName || row.case?.title || null,
+      hearingId: row.hearingId,
+      hearingTitle: row.hearing?.title || null,
+      activityType: row.activityType,
+      entryDate: row.entryDate,
+      hours,
+      paymentStatus,
+      invoiceId: invoice?.id || null,
+      invoiceNumber: invoice?.invoiceNumber || null,
+      paymentDate: latestPayment?.paymentDate || null,
+      rejectionComment: row.rejectionComment || null,
+      amount,
+    };
+  });
+
+  const filtered = query.paymentStatus
+    ? mapped.filter((row) => row.paymentStatus === query.paymentStatus)
+    : mapped;
+  const total = filtered.length;
+  const entries = filtered.slice((page - 1) * limit, page * limit);
+
+  return {
+    summary: {
+      submittedHours: Math.round(submittedHours * 100) / 100,
+      approvedHours: Math.round(approvedHours * 100) / 100,
+      pendingPaymentAmount: Math.round(pendingPaymentAmount * 100) / 100,
+      paidAmount: Math.round(paidAmount * 100) / 100,
+      nextPayoutDate,
+    },
+    entries,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit) || 1,
+      hasNextPage: page * limit < total,
+      hasPreviousPage: page > 1,
+    },
+  };
 };
 
 const updateTimesheet = async (caseId, timesheetId, data, currentUser) => {
@@ -650,6 +890,8 @@ const removeExpenseReceipt = async (
 module.exports = {
   createTimesheet,
   getTimesheets,
+  listTimesheetsHub,
+  getPaymentStatus,
   getTimesheet,
   updateTimesheet,
   deleteTimesheet,

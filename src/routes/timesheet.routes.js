@@ -27,6 +27,13 @@ router.get(
   controller.getTimesheets,
 );
 router.get(
+  "/payment-status",
+  requirePermission(PermissionModule.TIMESHEETS, PermissionAction.VIEW),
+  validate(validation.caseIdSchema, "params"),
+  validate(validation.paymentStatusQuerySchema, "query"),
+  controller.getPaymentStatus,
+);
+router.get(
   "/:timesheetId",
   requirePermission(PermissionModule.TIMESHEETS, PermissionAction.VIEW),
   validate(validation.timesheetIdSchema, "params"),

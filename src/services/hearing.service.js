@@ -6,9 +6,11 @@ const caseService = require("./case.service");
 const { accessibleCaseRelationWhere } = require("../utils/caseAccess");
 const zoomClient = require("./zoomClient.service");
 const {
+  buildIcs,
   sendHearingCalendarInvites,
 } = require("./calendarInvite.service");
 const ApiError = require("../utils/apiError");
+const { RoleName } = require("../constants/auth.constants");
 
 const activeStatuses = ["PENDING", "CONFIRMED", "RESCHEDULED"];
 const DEFAULT_WORKDAY_START = "09:00";
@@ -287,11 +289,37 @@ const sanitizeHearing = (hearing, currentUser) => {
   ).length;
   const neutrals = attendees.filter((attendee) => attendee.role === "NEUTRAL");
   const primaryNeutral = neutrals[0] || null;
+  const caseParticipants = hearing.case?.participants || [];
+  const caseManagerParticipant =
+    caseParticipants.find((p) => p.role === "CASE_MANAGER" && p.isPrimary) ||
+    caseParticipants.find((p) => p.role === "CASE_MANAGER") ||
+    null;
+  const caseManagerUser = caseManagerParticipant?.user || null;
+
+  const { participants: _participants, disputeCategory, ...caseRest } =
+    hearing.case || {};
 
   return {
     ...hearing,
+    case: hearing.case
+      ? {
+          ...caseRest,
+          disputeType: disputeCategory?.name || null,
+        }
+      : hearing.case,
     attendees,
     hearingTypeLabel: HEARING_TYPE_LABELS[hearing.type] || hearing.type,
+    disputeType: disputeCategory?.name || null,
+    caseType: hearing.case?.caseType || null,
+    caseManager: caseManagerUser
+      ? {
+          id: caseManagerUser.id,
+          firstName: caseManagerUser.firstName,
+          lastName: caseManagerUser.lastName,
+          email: caseManagerUser.email,
+          phone: caseManagerUser.phone || null,
+        }
+      : null,
     outcomeNotes: hearing.outcomeNotes ?? null,
     assignedNeutral: primaryNeutral
       ? {
@@ -884,19 +912,110 @@ const getHearing = async (caseId, hearingId, currentUser) => {
   };
 };
 
+const loadHearingRelatedDocuments = async (hearing, currentUser) => {
+  const where = {
+    caseId: hearing.caseId,
+    hearingId: hearing.id,
+    deletedAt: null,
+  };
+  if (!isInternalUser(currentUser)) {
+    where.OR = [
+      { uploadedByUserId: currentUser.id },
+      { visibility: "ALL_AUTHORIZED_PARTICIPANTS" },
+      ...(currentUser.role?.name === RoleName.NEUTRAL
+        ? [{ visibility: "NEUTRAL_ONLY" }]
+        : []),
+      {
+        visibility: "SPECIFIC_PARTY_LAWYER_CLIENT",
+        accessGrants: {
+          some: {
+            caseParticipant: {
+              userId: currentUser.id,
+              accessStatus: "ACTIVE",
+            },
+          },
+        },
+      },
+    ];
+  }
+  const rows = await prisma.document.findMany({
+    where,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: 50,
+    select: {
+      id: true,
+      name: true,
+      createdAt: true,
+      visibility: true,
+      processingStatus: true,
+      category: { select: { name: true } },
+      currentVersion: { select: { mimeType: true, fileSizeBytes: true } },
+    },
+  });
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    uploadedAt: row.createdAt,
+    category: row.category?.name || null,
+    visibility: row.visibility,
+    processingStatus: row.processingStatus,
+    fileType: row.currentVersion?.mimeType || null,
+    fileSize: row.currentVersion?.fileSizeBytes || null,
+  }));
+};
+
 const getHearingById = async (hearingId, currentUser) => {
   const hearing = await hearingRepository.findHearingById(hearingId);
   if (!hearing) throw new ApiError(404, "Hearing not found.");
   await caseService.getCaseById(hearing.caseId, currentUser);
-  const activity = await hearingRepository.findHearingTimeline(
-    hearing.caseId,
-    hearingId,
-  );
+  const [activity, documents] = await Promise.all([
+    hearingRepository.findHearingTimeline(hearing.caseId, hearingId),
+    loadHearingRelatedDocuments(hearing, currentUser),
+  ]);
   const sanitized = sanitizeHearing(hearing, currentUser);
   return {
     ...sanitized,
+    documents,
+    relatedDocuments: documents,
     activity,
     timeline: activity,
+  };
+};
+
+const downloadHearingIcs = async (hearingId, currentUser) => {
+  const hearing = await hearingRepository.findHearingById(hearingId);
+  if (!hearing) throw new ApiError(404, "Hearing not found.");
+  await caseService.getCaseById(hearing.caseId, currentUser);
+  const startTime = hearing.startTime || hearing.hearingDate;
+  if (!startTime) {
+    throw new ApiError(400, "Hearing does not have a start time for ICS export.");
+  }
+  const endTime =
+    hearing.endTime ||
+    new Date(
+      new Date(startTime).getTime() +
+        (hearing.durationMinutes || 60) * 60 * 1000,
+    );
+  const description = [
+    hearing.instructions || "",
+    hearing.zoomJoinUrl ? `Zoom: ${hearing.zoomJoinUrl}` : "",
+    hearing.case?.caseNumber ? `Case: ${hearing.case.caseNumber}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const ics = buildIcs({
+    uid: `${hearing.id}@fedarb.hearings`,
+    title: hearing.title,
+    description,
+    location: hearing.zoomJoinUrl || hearing.location || "TBD",
+    startTime,
+    endTime,
+    organizerEmail: process.env.SMTP_FROM || process.env.SMTP_USER,
+  });
+  return {
+    filename: `${hearing.hearingReference || hearing.id}.ics`,
+    contentType: "text/calendar; charset=utf-8",
+    content: ics,
   };
 };
 
@@ -1303,6 +1422,7 @@ module.exports = {
   listHearingsHub,
   getHearing,
   getHearingById,
+  downloadHearingIcs,
   updateHearing,
   updateAttendance,
   rescheduleHearing,

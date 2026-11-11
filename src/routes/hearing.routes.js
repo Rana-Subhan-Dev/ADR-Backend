@@ -47,6 +47,13 @@ hubRouter.get(
 );
 
 hubRouter.get(
+  "/:hearingId/ics",
+  requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
+  validate(hubHearingIdSchema, "params"),
+  hearingController.downloadHearingIcs,
+);
+
+hubRouter.get(
   "/:hearingId",
   requirePermission(PermissionModule.CASES, PermissionAction.VIEW),
   validate(hubHearingIdSchema, "params"),

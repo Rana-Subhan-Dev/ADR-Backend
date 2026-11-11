@@ -150,13 +150,13 @@ const update = (id, data, tx = prisma) =>
   tx.neutralTimesheet.update({ where: { id }, data, select });
 const remove = (id, tx = prisma) =>
   tx.neutralTimesheet.delete({ where: { id }, select });
-const getMany = ({ where, skip, take }) =>
+const getMany = ({ where, skip, take, orderBy }) =>
   prisma.$transaction([
     prisma.neutralTimesheet.findMany({
       where,
       skip,
       take,
-      orderBy: [{ entryDate: "desc" }, { id: "desc" }],
+      orderBy: orderBy || [{ entryDate: "desc" }, { id: "desc" }],
       select: listSelect,
     }),
     prisma.neutralTimesheet.count({ where }),

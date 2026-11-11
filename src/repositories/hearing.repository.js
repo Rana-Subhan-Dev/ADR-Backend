@@ -42,6 +42,27 @@ const hearingSelect = {
       caseNumber: true,
       title: true,
       caseType: true,
+      disputeCategory: { select: { id: true, name: true } },
+      participants: {
+        where: {
+          role: "CASE_MANAGER",
+          OR: [{ isPrimary: true }, { accessStatus: "ACTIVE" }],
+        },
+        select: {
+          role: true,
+          isPrimary: true,
+          user: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+              phone: true,
+            },
+          },
+        },
+        take: 5,
+      },
     },
   },
   attendees: {

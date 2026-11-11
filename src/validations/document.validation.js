@@ -20,6 +20,7 @@ const documentFileSchema = Joi.object({
   name: Joi.string().trim().max(255).optional(),
   description: Joi.string().trim().max(20000).allow("", null).optional(),
   categoryId: Joi.string().uuid().allow(null).optional(),
+  hearingId: Joi.string().uuid().allow(null).optional(),
   tags: Joi.array()
     .items(Joi.string().trim().min(1).max(100))
     .max(20)
@@ -57,6 +58,7 @@ const listSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(100).default(20),
   categoryId: Joi.string().uuid().optional(),
+  category: Joi.string().trim().max(255).optional(),
   visibility: Joi.string()
     .valid(...Object.values(DocumentVisibility))
     .optional(),
@@ -66,8 +68,20 @@ const listSchema = Joi.object({
   processingStatus: Joi.string()
     .valid(...Object.values(DocumentProcessingStatus))
     .optional(),
+  uploadedByUserId: Joi.string().uuid().optional(),
+  fileType: Joi.string().trim().max(100).optional(),
+  hearingId: Joi.string().uuid().optional(),
+  dateFrom: Joi.date().iso().optional(),
+  dateTo: Joi.date().iso().optional(),
   search: Joi.string().trim().max(255).optional(),
   includeDeleted: Joi.boolean().optional(),
+  sortBy: Joi.string()
+    .valid("createdAt", "name", "uploadedAt")
+    .optional(),
+  sortOrder: Joi.string().valid("asc", "desc").optional(),
+});
+const hubDocumentIdSchema = Joi.object({
+  documentId: Joi.string().uuid().required(),
 });
 const getDocumentSchema = Joi.object({
   includeDeleted: Joi.boolean().optional(),
@@ -92,19 +106,28 @@ const listDocumentsHubSchema = Joi.object({
   visibility: Joi.string()
     .valid(...Object.values(DocumentVisibility))
     .optional(),
+  reviewStatus: Joi.string()
+    .valid(...Object.values(DocumentReviewStatus))
+    .optional(),
   processingStatus: Joi.string()
     .valid(...Object.values(DocumentProcessingStatus))
     .optional(),
   uploadedByUserId: Joi.string().uuid().optional(),
   fileType: Joi.string().trim().max(100).optional(),
+  hearingId: Joi.string().uuid().optional(),
   dateFrom: Joi.date().iso().optional(),
   dateTo: Joi.date().iso().optional(),
   includeDeleted: Joi.boolean().optional(),
+  sortBy: Joi.string()
+    .valid("createdAt", "name", "uploadedAt")
+    .optional(),
+  sortOrder: Joi.string().valid("asc", "desc").optional(),
 });
 
 module.exports = {
   caseIdSchema,
   documentIdSchema,
+  hubDocumentIdSchema,
   documentVersionIdSchema,
   documentFileSchema,
   uploadVersionSchema,

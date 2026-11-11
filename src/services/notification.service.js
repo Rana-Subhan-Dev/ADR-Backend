@@ -1,25 +1,41 @@
 const notificationRepository = require("../repositories/notification.repository");
 const ApiError = require("../utils/apiError");
 
-const buildHref = (row) => {
+const portalPrefixForRole = (roleName) => {
+  switch (roleName) {
+    case "NEUTRAL":
+      return "/neutral";
+    case "LAWYER":
+      return "/lawyer";
+    case "CLIENT":
+      return "/client";
+    case "ACCOUNTING_STAFF":
+      return "/accounting";
+    default:
+      return "/case-manager";
+  }
+};
+
+const buildHref = (row, roleName) => {
   const data = row.templateData || {};
   if (data.href) return data.href;
+  const prefix = portalPrefixForRole(roleName);
   if (row.relatedRecordType === "Case" && row.relatedRecordId) {
-    return `/case-manager/cases/${row.relatedRecordId}`;
+    return `${prefix}/cases/${row.relatedRecordId}`;
   }
   if (row.relatedRecordType === "Hearing" && row.relatedRecordId) {
-    return `/case-manager/hearings/${row.relatedRecordId}`;
+    return `${prefix}/hearings/${row.relatedRecordId}`;
   }
   if (row.relatedRecordType === "DocuSignEnvelope" && data.caseId) {
-    return `/case-manager/docusign/${row.relatedRecordId}`;
+    return `${prefix}/cases/${data.caseId}/docusign`;
   }
   if (row.relatedRecordType === "Inquiry" && row.relatedRecordId) {
-    return `/case-manager/cases/${row.relatedRecordId}/inquiry`;
+    return `${prefix}/cases/${row.relatedRecordId}`;
   }
   return null;
 };
 
-const mapNotification = (row) => {
+const mapNotification = (row, roleName) => {
   const templateData = row.templateData || null;
   const title =
     templateData?.title ||
@@ -34,7 +50,7 @@ const mapNotification = (row) => {
     title,
     message,
     kind: templateData?.kind || row.eventType || null,
-    href: buildHref(row),
+    href: buildHref(row, roleName),
     case: templateData?.caseNumber || templateData?.case || null,
     matter: templateData?.matter || templateData?.caseTitle || null,
     caseType: templateData?.caseType || null,
@@ -77,8 +93,9 @@ const getNotifications = async (query, currentUser) => {
   });
 
   const totalPages = Math.ceil(total / limit) || 1;
+  const roleName = currentUser.role?.name;
   return {
-    notifications: rows.map(mapNotification),
+    notifications: rows.map((row) => mapNotification(row, roleName)),
     unreadCount,
     pagination: {
       page,
@@ -106,11 +123,12 @@ const markRead = async (notificationId, currentUser) => {
   if (!notification || notification.recipientUserId !== currentUser.id) {
     throw new ApiError(404, "Notification not found.");
   }
-  if (notification.readAt) return mapNotification(notification);
+  const roleName = currentUser.role?.name;
+  if (notification.readAt) return mapNotification(notification, roleName);
   const updated = await notificationRepository.markNotificationRead(
     notificationId,
   );
-  return mapNotification(updated);
+  return mapNotification(updated, roleName);
 };
 
 const markAllRead = async (currentUser) => {

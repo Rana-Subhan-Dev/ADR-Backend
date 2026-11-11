@@ -205,6 +205,7 @@ const uploadDocument = async (caseId, data, file, currentUser) => {
             name: data.name || file.originalname,
             description: data.description || null,
             categoryId: data.categoryId || null,
+            hearingId: data.hearingId || null,
             visibility: data.visibility,
             reviewStatus: "PENDING_REVIEW",
             processingStatus: "COMPLETED",
@@ -522,18 +523,37 @@ const buildDocumentSearchOr = (search) => {
   ];
 };
 
+const sharedDocumentListFilters = (query) => ({
+  ...categoryFilterFromQuery(query),
+  ...(query.visibility && { visibility: query.visibility }),
+  ...(query.reviewStatus && { reviewStatus: query.reviewStatus }),
+  ...(query.processingStatus && {
+    processingStatus: query.processingStatus,
+  }),
+  ...(query.uploadedByUserId && {
+    uploadedByUserId: query.uploadedByUserId,
+  }),
+  ...(query.hearingId && { hearingId: query.hearingId }),
+  ...(query.fileType && {
+    currentVersion: {
+      mimeType: { contains: query.fileType, mode: "insensitive" },
+    },
+  }),
+  ...((query.dateFrom || query.dateTo) && {
+    createdAt: {
+      ...(query.dateFrom ? { gte: new Date(query.dateFrom) } : {}),
+      ...(query.dateTo ? { lte: new Date(query.dateTo) } : {}),
+    },
+  }),
+  ...(query.search && { OR: buildDocumentSearchOr(query.search) }),
+});
+
 const getDocuments = async (caseId, query, currentUser) => {
   await caseService.getCaseById(caseId, currentUser);
   const where = {
     caseId,
     deletedAt: null,
-    ...(query.categoryId && { categoryId: query.categoryId }),
-    ...(query.visibility && { visibility: query.visibility }),
-    ...(query.reviewStatus && { reviewStatus: query.reviewStatus }),
-    ...(query.processingStatus && {
-      processingStatus: query.processingStatus,
-    }),
-    ...(query.search && { OR: buildDocumentSearchOr(query.search) }),
+    ...sharedDocumentListFilters(query),
   };
   if (!isManager(currentUser)) {
     where.AND = [...(where.AND || []), { OR: nonManagerDocumentVisibilityOr(currentUser) }];
@@ -556,29 +576,21 @@ const listDocumentsHub = async (query, currentUser) => {
 
   const where = {
     ...(query.caseId && { caseId: query.caseId }),
-    ...(query.visibility && { visibility: query.visibility }),
-    ...(query.processingStatus && {
-      processingStatus: query.processingStatus,
-    }),
-    ...(query.uploadedByUserId && {
-      uploadedByUserId: query.uploadedByUserId,
-    }),
-    ...(query.fileType && {
-      currentVersion: {
-        mimeType: { contains: query.fileType, mode: "insensitive" },
-      },
-    }),
-    ...((query.dateFrom || query.dateTo) && {
-      createdAt: {
-        ...(query.dateFrom ? { gte: new Date(query.dateFrom) } : {}),
-        ...(query.dateTo ? { lte: new Date(query.dateTo) } : {}),
-      },
-    }),
-    ...categoryFilterFromQuery(query),
-    ...(query.search && { OR: buildDocumentSearchOr(query.search) }),
+    ...sharedDocumentListFilters(query),
     ...(and.length && { AND: and }),
   };
   return paginateDocuments(where, query, true);
+};
+
+const getDocumentFromHub = async (documentId, currentUser, query = {}) => {
+  const document = await prisma.document.findUnique({
+    where: { id: documentId },
+    select: { id: true, caseId: true, deletedAt: true },
+  });
+  if (!document || (document.deletedAt && !isManager(currentUser))) {
+    throw new ApiError(404, "Document not found.");
+  }
+  return getDocument(document.caseId, documentId, currentUser, query);
 };
 
 const getDocument = async (caseId, documentId, currentUser, query = {}) => {
@@ -840,6 +852,7 @@ module.exports = {
   bulkUploadDocuments,
   getDocuments,
   listDocumentsHub,
+  getDocumentFromHub,
   getDocument,
   uploadNewVersion,
   updateVisibility,

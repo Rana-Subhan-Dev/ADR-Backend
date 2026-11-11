@@ -55,6 +55,9 @@ model Document {
   caseId String
   case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
+  hearingId String?
+  hearing   Hearing? @relation(fields: [hearingId], references: [id], onDelete: SetNull)
+
   name        String
   description String? @db.Text
 
@@ -94,6 +97,7 @@ model Document {
 
   @@index([caseId, categoryId, createdAt])
   @@index([uploadedByUserId])
+  @@index([hearingId])
   @@map("documents")
 }
 

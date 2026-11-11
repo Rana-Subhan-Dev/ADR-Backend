@@ -84,6 +84,18 @@ const getHearingById = asyncHandler(async (req, res) =>
       ),
     ),
 );
+const downloadHearingIcs = asyncHandler(async (req, res) => {
+  const file = await hearingService.downloadHearingIcs(
+    req.params.hearingId,
+    req.user,
+  );
+  res.setHeader("Content-Type", file.contentType);
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${file.filename}"`,
+  );
+  return res.status(200).send(file.content);
+});
 const getHearing = asyncHandler(async (req, res) =>
   res
     .status(200)
@@ -217,6 +229,7 @@ module.exports = {
   getHearings,
   listHearingsHub,
   getHearingById,
+  downloadHearingIcs,
   getHearing,
   updateHearing,
   updateAttendance,

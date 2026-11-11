@@ -10,6 +10,10 @@ model NeutralProfile {
   bio               String?     @db.Text
   credentials       String?
   yearsOfExperience Int?
+  education         Json        @default("[]")
+  licensedStates    String[]    @default([])
+  languages         String[]    @default([])
+  bioNotes          Json        @default("[]")
 
   supportContacts NeutralSupportContact[]
 

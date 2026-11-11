@@ -4,13 +4,12 @@ const auth = require("../middlewares/auth.middleware");
 const validate = require("../middlewares/validate.middleware");
 const {
   requirePermission,
-  requireInternalRole,
+  requireAnyPermission,
 } = require("../middlewares/permission.middleware");
 const {
   PermissionModule,
   PermissionAction,
 } = require("../constants/permission.constants");
-const { RoleName } = require("../constants/auth.constants");
 const {
   caseIdSchema,
   noteIdSchema,
@@ -53,18 +52,19 @@ router.get(
 );
 router.patch(
   "/:noteId",
-  requirePermission(PermissionModule.CASES, PermissionAction.EDIT),
+  requireAnyPermission(
+    [PermissionModule.CASES, PermissionAction.EDIT],
+    [PermissionModule.CASES, PermissionAction.CREATE],
+  ),
   validate(noteIdSchema, "params"),
   validate(updateCaseNoteSchema),
   caseNoteController.updateCaseNote,
 );
 router.delete(
   "/:noteId",
-  requirePermission(PermissionModule.CASES, PermissionAction.DELETE),
-  requireInternalRole(
-    RoleName.SUPER_ADMIN,
-    RoleName.ADMIN_LEADERSHIP,
-    RoleName.CASE_MANAGER,
+  requireAnyPermission(
+    [PermissionModule.CASES, PermissionAction.DELETE],
+    [PermissionModule.CASES, PermissionAction.CREATE],
   ),
   validate(noteIdSchema, "params"),
   caseNoteController.deleteCaseNote,

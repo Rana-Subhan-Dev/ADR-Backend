@@ -181,6 +181,11 @@ enum DocumentAccessAction {
   DOWNLOADED
 }
 
+enum PracticeLibraryItemType {
+  FOLDER
+  FILE
+}
+
 enum CaseNoteType {
   INTERNAL_NOTE
   CASE_UPDATE

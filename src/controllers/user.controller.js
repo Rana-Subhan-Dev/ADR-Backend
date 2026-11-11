@@ -10,7 +10,7 @@ const getCurrentUser = asyncHandler(async (req, res) =>
     .json(
       new ApiResponse(
         200,
-        sanitizeUser(req.user),
+        sanitizeUser(await userService.getCurrentUserProfile(req.user.id)),
         "Current user fetched successfully.",
       ),
     ),
@@ -32,6 +32,30 @@ const updateCurrentUser = asyncHandler(async (req, res) => {
       ),
     );
 });
+
+const getCurrentUserBio = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await userService.getCurrentUserBio(req.user.id),
+        "Bio fetched successfully.",
+      ),
+    ),
+);
+
+const updateCurrentUserBio = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await userService.updateCurrentUserBio(req.user.id, req.body),
+        "Bio updated successfully.",
+      ),
+    ),
+);
 
 const getUsers = asyncHandler(async (req, res) => {
   const result = await userService.getUsers(req.query);
@@ -74,6 +98,8 @@ const updateUserStatus = asyncHandler(async (req, res) => {
 module.exports = {
   getCurrentUser,
   updateCurrentUser,
+  getCurrentUserBio,
+  updateCurrentUserBio,
   getUsers,
   getUserById,
   updateUser,

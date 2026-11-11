@@ -84,24 +84,56 @@ const listTimesheetsSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(100).default(20),
   neutralUserId: Joi.string().uuid().optional(),
+  caseId: Joi.string().uuid().optional(),
+  hearingId: Joi.string().uuid().optional(),
   activityType: Joi.string()
     .valid(...Object.values(TimesheetActivityType))
     .optional(),
   status: Joi.string()
-    .valid(...Object.values(TimesheetStatus))
+    .valid(...Object.values(TimesheetStatus), "APPROVED", "REJECTED")
     .optional(),
   approvalStatus: Joi.string()
     .valid(...Object.values(TimesheetApprovalStatus))
     .optional(),
   from: Joi.date().iso().optional(),
   to: Joi.date().iso().optional(),
+  workDateFrom: Joi.date().iso().optional(),
+  workDateTo: Joi.date().iso().optional(),
+  entryDateFrom: Joi.date().iso().optional(),
+  entryDateTo: Joi.date().iso().optional(),
+  sortBy: Joi.string()
+    .valid("entryDate", "hours", "activityType", "status", "createdAt")
+    .optional(),
+  sortOrder: Joi.string().valid("asc", "desc").optional(),
+})
+  .custom((value, helpers) => {
+    const from =
+      value.workDateFrom || value.entryDateFrom || value.from || null;
+    const to = value.workDateTo || value.entryDateTo || value.to || null;
+    if (from && to && new Date(to) < new Date(from)) {
+      return helpers.error("any.invalid");
+    }
+    return value;
+  })
+  .messages({ "any.invalid": "to must be later than from." });
+
+const paymentStatusQuerySchema = Joi.object({
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(100).default(20),
+  workDateFrom: Joi.date().iso().optional(),
+  workDateTo: Joi.date().iso().optional(),
+  paymentStatus: Joi.string()
+    .valid("PAID", "PENDING", "AWAITING_APPROVAL", "NOT_AVAILABLE")
+    .optional(),
 })
   .custom((value, helpers) =>
-    value.from && value.to && value.to < value.from
+    value.workDateFrom &&
+    value.workDateTo &&
+    new Date(value.workDateTo) < new Date(value.workDateFrom)
       ? helpers.error("any.invalid")
       : value,
   )
-  .messages({ "any.invalid": "to must be later than from." });
+  .messages({ "any.invalid": "workDateTo must be later than workDateFrom." });
 
 const reviewTimesheetSchema = Joi.object({
   approvalStatus: Joi.string().valid("APPROVED", "REJECTED").required(),
@@ -127,5 +159,6 @@ module.exports = {
   updateExpenseSchema,
   attachReceiptSchema,
   listTimesheetsSchema,
+  paymentStatusQuerySchema,
   reviewTimesheetSchema,
 };

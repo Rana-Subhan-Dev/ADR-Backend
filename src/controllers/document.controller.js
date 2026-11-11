@@ -86,6 +86,22 @@ const listDocumentsHub = asyncHandler(async (req, res) =>
     ),
 );
 
+const getDocumentFromHub = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await documentService.getDocumentFromHub(
+          req.params.documentId,
+          req.user,
+          req.query,
+        ),
+        "Document fetched successfully.",
+      ),
+    ),
+);
+
 const getDocument = asyncHandler(async (req, res) =>
   res
     .status(200)
@@ -226,6 +242,7 @@ module.exports = {
   bulkUploadDocuments,
   getDocuments,
   listDocumentsHub,
+  getDocumentFromHub,
   getDocument,
   uploadNewVersion,
   updateVisibility,

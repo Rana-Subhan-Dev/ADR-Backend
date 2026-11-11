@@ -1,0 +1,23 @@
+model PracticeLibraryItem {
+  id String @id @default(uuid())
+
+  name        String
+  description String? @db.Text
+  itemType    PracticeLibraryItemType @default(FILE)
+  parentId    String?
+  parent      PracticeLibraryItem?  @relation("PracticeLibraryTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children    PracticeLibraryItem[] @relation("PracticeLibraryTree")
+
+  fileKey         String?
+  mimeType        String?
+  fileSizeBytes   Int?
+  sortOrder       Int      @default(0)
+  isPublished     Boolean  @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([parentId, sortOrder])
+  @@index([isPublished, updatedAt])
+  @@map("practice_library_items")
+}

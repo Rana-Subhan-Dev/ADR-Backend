@@ -19,6 +19,10 @@ const getTimelineSchema = Joi.object({
     .valid(...Object.values(CaseTimelineEventType))
     .optional(),
   actorUserId: Joi.string().uuid().optional(),
+  relatedRecordType: Joi.string()
+    .valid("DOCUMENT", "HEARING", "NOTE", "TIMESHEET", "Document", "Hearing", "Note", "Timesheet")
+    .optional(),
+  search: Joi.string().trim().max(255).allow("").optional(),
   from: Joi.date().iso().optional(),
   to: Joi.date().iso().optional(),
 })

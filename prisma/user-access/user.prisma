@@ -6,7 +6,10 @@ model User {
 
   firstName       String
   lastName        String
+  prefix          String?
+  informalName    String?
   phone           String?
+  mobile          String?
   jobTitle        String?
   company         String?
   bookList        Boolean @default(false)

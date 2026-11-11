@@ -5,8 +5,11 @@ const CASE_SORT_FIELDS = {
   UPDATED_AT: "updatedAt",
   CASE_NUMBER: "caseNumber",
   TITLE: "title",
+  MATTER_NAME: "matterName",
   LIFECYCLE_STATUS: "lifecycleStatus",
   CASE_TYPE: "caseType",
+  CASE_MANAGER: "caseManager",
+  NEXT_HEARING: "nextHearing",
 };
 
 const CASE_PREFIXES = {

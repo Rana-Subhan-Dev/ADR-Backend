@@ -21,6 +21,17 @@ const getTimesheets = respond(
   (req) =>
     timesheetService.getTimesheets(req.params.caseId, req.query, req.user),
 );
+const listTimesheetsHub = respond(
+  200,
+  "Timesheet entries fetched successfully.",
+  (req) => timesheetService.listTimesheetsHub(req.query, req.user),
+);
+const getPaymentStatus = respond(
+  200,
+  "Payment status fetched successfully.",
+  (req) =>
+    timesheetService.getPaymentStatus(req.params.caseId, req.query, req.user),
+);
 const getTimesheet = respond(
   200,
   "Timesheet entry fetched successfully.",
@@ -126,6 +137,8 @@ const removeExpenseReceipt = respond(
 module.exports = {
   createTimesheet,
   getTimesheets,
+  listTimesheetsHub,
+  getPaymentStatus,
   getTimesheet,
   updateTimesheet,
   deleteTimesheet,
