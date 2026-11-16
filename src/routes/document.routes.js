@@ -96,10 +96,22 @@ router.get(
   documentController.downloadDocumentVersion,
 );
 router.get(
+  "/:documentId/versions/:versionId/view",
+  requirePermission(PermissionModule.DOCUMENTS, PermissionAction.VIEW),
+  validate(documentVersionIdSchema, "params"),
+  documentController.viewDocumentVersion,
+);
+router.get(
   "/:documentId/download",
   requirePermission(PermissionModule.DOCUMENTS, PermissionAction.VIEW),
   validate(documentIdSchema, "params"),
   documentController.downloadDocument,
+);
+router.get(
+  "/:documentId/view",
+  requirePermission(PermissionModule.DOCUMENTS, PermissionAction.VIEW),
+  validate(documentIdSchema, "params"),
+  documentController.viewDocument,
 );
 router.get(
   "/:documentId/access-logs",

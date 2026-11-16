@@ -527,14 +527,48 @@ const retryQuickBooksSyncSchema = Joi.object({
   logIds: Joi.array().items(Joi.string().uuid()).min(1).required(),
 });
 
+const NEUTRAL_STATEMENT_TYPES = [
+  "FIRM_INVOICE_PAYMENT",
+  "PLATFORM_TIMESHEET_PAYMENT",
+  "FINAL_PAYMENT",
+];
+
+const NEUTRAL_LINE_CODES = ["NEUTRAL_SERVICES", "FEDARB_FEE", "EXPENSES"];
+
+const neutralPaymentStatementPreviewSchema = Joi.object({
+  statementType: Joi.string()
+    .valid(...NEUTRAL_STATEMENT_TYPES)
+    .optional(),
+  invoiceId: Joi.string().uuid().optional(),
+  timesheetIds: Joi.alternatives()
+    .try(
+      Joi.array().items(Joi.string().uuid()),
+      Joi.string().trim().allow(""),
+    )
+    .optional(),
+});
+
 const neutralPaymentStatementSchema = Joi.object({
-  neutralParticipantId: Joi.string().uuid().optional(),
-  timesheetIds: Joi.array().items(Joi.string().uuid()).min(1).required(),
-  adminFeePercentage: Joi.number().precision(2).min(0).max(100).default(15.0),
-  statementDate: Joi.date()
-    .iso()
-    .default(() => new Date().toISOString()),
-  notes: Joi.string().max(1000).allow(null, "").optional(),
+  statementType: Joi.string()
+    .valid(...NEUTRAL_STATEMENT_TYPES)
+    .required(),
+  notes: Joi.string().trim().max(2000).allow(null, "").optional(),
+  invoiceId: Joi.string().uuid().allow(null).optional(),
+  timesheetIds: Joi.array().items(Joi.string().uuid()).default([]),
+  statementDate: Joi.date().iso().optional(),
+  servicesThroughDate: Joi.date().iso().allow(null).optional(),
+  feePercent: Joi.number().precision(2).min(0).max(100).optional(),
+  lineItems: Joi.array()
+    .items(
+      Joi.object({
+        code: Joi.string()
+          .valid(...NEUTRAL_LINE_CODES)
+          .required(),
+        amount: Joi.number().precision(2).required(),
+      }),
+    )
+    .optional(),
+  totalPaymentToNeutral: Joi.number().precision(2).optional(),
 });
 
 module.exports = {
@@ -561,5 +595,8 @@ module.exports = {
   updateInvoicePaymentStatusSchema,
   listQuickBooksSyncLogsSchema,
   retryQuickBooksSyncSchema,
+  neutralPaymentStatementPreviewSchema,
   neutralPaymentStatementSchema,
+  NEUTRAL_STATEMENT_TYPES,
+  NEUTRAL_LINE_CODES,
 };

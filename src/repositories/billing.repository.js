@@ -295,6 +295,9 @@ const invoiceSelect = {
       title: true,
       caseType: true,
       lifecycleStatus: true,
+      inquiry: {
+        select: { matterName: true },
+      },
       participants: {
         where: {
           role: { in: ["NEUTRAL", "CASE_MANAGER"] },
@@ -840,6 +843,15 @@ const findTimesheetsByIds = (ids, tx = prisma) =>
     where: { id: { in: ids } },
     include: {
       neutral: true,
+      expenses: {
+        select: {
+          id: true,
+          expenseType: true,
+          expenseDate: true,
+          amount: true,
+          description: true,
+        },
+      },
       case: {
         include: {
           billingConfiguration: true,

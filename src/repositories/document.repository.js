@@ -83,6 +83,9 @@ const getAccessLogs = (documentId, skip, take, filters = {}) => {
   const where = {
     documentId,
     ...(filters.action && { action: filters.action }),
+    ...(filters.role && {
+      accessedBy: { role: { name: filters.role } },
+    }),
     ...((filters.dateFrom || filters.dateTo) && {
       timestamp: {
         ...(filters.dateFrom ? { gte: new Date(filters.dateFrom) } : {}),

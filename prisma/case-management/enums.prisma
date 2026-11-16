@@ -378,3 +378,13 @@ enum MigrationRecordStatus {
   WARNING
   ERROR
 }
+
+enum ConflictsSearchWindow {
+  LAST_5_YEARS
+  ALL_RECORDS
+}
+
+enum ConflictsCheckStatus {
+  CLEAR
+  CONFLICTS_FOUND
+}

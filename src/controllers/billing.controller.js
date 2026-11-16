@@ -198,9 +198,20 @@ const retryQuickBooksSync = respond(
   (req) => billingService.retryQuickBooksSync(req.body, req.user),
 );
 
-const generateNeutralPaymentStatement = respond(
+const previewNeutralPaymentStatement = respond(
   200,
-  "Neutral payment statement generated successfully.",
+  "Neutral payment statement preview fetched successfully.",
+  (req) =>
+    billingService.previewNeutralPaymentStatement(
+      req.params.caseId,
+      req.query,
+      req.user,
+    ),
+);
+
+const generateNeutralPaymentStatement = respond(
+  201,
+  "Neutral payment statement submitted for Peer/Controller Review.",
   (req) =>
     billingService.generateNeutralPaymentStatement(
       req.params.caseId,
@@ -248,5 +259,6 @@ module.exports = {
   sendInvoicePaymentReminder,
   getQuickBooksSyncLogs,
   retryQuickBooksSync,
+  previewNeutralPaymentStatement,
   generateNeutralPaymentStatement,
 };

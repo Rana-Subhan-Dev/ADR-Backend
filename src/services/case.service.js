@@ -1527,7 +1527,9 @@ const messageAllParties = async (caseId, payload, currentUser) => {
   if (!existingCase) throw new ApiError(404, "Case not found.");
   await assertCaseAccess(existingCase, currentUser);
 
-  const { recipientParticipantIds } = payload;
+  const requestedRecipientIds = Array.isArray(payload.recipientParticipantIds)
+    ? payload.recipientParticipantIds
+    : [];
   const message = String(payload.body || payload.message || "").trim();
   if (!message) {
     throw new ApiError(400, "body or message is required.");
@@ -1538,25 +1540,39 @@ const messageAllParties = async (caseId, payload, currentUser) => {
     `New message for case ${existingCase.caseNumber}`;
 
   return runTransaction(async (tx) => {
-    const participants = await caseRepository.findActiveCaseParticipantsByIds(
-      caseId,
-      recipientParticipantIds,
-      tx,
-    );
+    let participants;
+    let recipientParticipantIds = requestedRecipientIds;
 
-    if (!participants.length) {
-      throw new ApiError(400, "No valid recipients found for this case.");
-    }
-
-    const participantIds = new Set(participants.map((row) => row.id));
-    const missing = recipientParticipantIds.filter(
-      (participantId) => !participantIds.has(participantId),
-    );
-    if (missing.length) {
-      throw new ApiError(
-        400,
-        `Invalid participant ids for this case: ${missing.join(", ")}`,
+    if (recipientParticipantIds.length === 0) {
+      participants = await caseRepository.findActiveCaseManagers(caseId, tx);
+      recipientParticipantIds = participants.map((row) => row.id);
+      if (!participants.length) {
+        throw new ApiError(
+          400,
+          "No active case manager is assigned to this case.",
+        );
+      }
+    } else {
+      participants = await caseRepository.findActiveCaseParticipantsByIds(
+        caseId,
+        recipientParticipantIds,
+        tx,
       );
+
+      if (!participants.length) {
+        throw new ApiError(400, "No valid recipients found for this case.");
+      }
+
+      const participantIds = new Set(participants.map((row) => row.id));
+      const missing = recipientParticipantIds.filter(
+        (participantId) => !participantIds.has(participantId),
+      );
+      if (missing.length) {
+        throw new ApiError(
+          400,
+          `Invalid participant ids for this case: ${missing.join(", ")}`,
+        );
+      }
     }
 
     const recipientsByUserId = new Map();
@@ -1610,6 +1626,7 @@ const messageAllParties = async (caseId, payload, currentUser) => {
     return {
       caseId,
       notifiedCount: notificationResult.count,
+      recipientParticipantIds,
     };
   });
 };

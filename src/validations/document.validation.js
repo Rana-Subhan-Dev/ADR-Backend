@@ -4,6 +4,7 @@ const {
   DocumentReviewStatus,
   DocumentProcessingStatus,
   DocumentAccessAction,
+  RoleName,
 } = require("@prisma/client");
 
 const caseIdSchema = Joi.object({ caseId: Joi.string().uuid().required() });
@@ -91,6 +92,9 @@ const accessLogSchema = Joi.object({
   limit: Joi.number().integer().min(1).max(100).default(20),
   action: Joi.string()
     .valid(...Object.values(DocumentAccessAction))
+    .optional(),
+  role: Joi.string()
+    .valid(...Object.values(RoleName))
     .optional(),
   dateFrom: Joi.date().iso().optional(),
   dateTo: Joi.date().iso().optional(),

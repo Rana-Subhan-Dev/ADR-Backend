@@ -780,6 +780,50 @@ const getDocumentVersions = async (caseId, documentId, currentUser) => {
   }));
 };
 
+const resolveDocumentVersion = async (document, documentId, versionId) => {
+  let version = document.currentVersion;
+  if (versionId) {
+    version = await documentRepository.findVersionById(documentId, versionId);
+  }
+  if (!version) throw new ApiError(404, "Document version not found.");
+  return version;
+};
+
+const buildDocumentAccessUrl = async ({
+  document,
+  version,
+  disposition,
+  action,
+  currentUser,
+  expiresIn = 300,
+}) => {
+  const fileName = document.name || `document-${document.id}`;
+  const url = await getSignedDownloadUrl(version.fileKey, expiresIn, {
+    disposition,
+    fileName,
+    contentType: version.mimeType || undefined,
+  });
+  await prisma.documentAccessLog.create({
+    data: {
+      documentId: document.id,
+      accessedByUserId: currentUser.id,
+      action,
+    },
+  });
+  return {
+    url,
+    viewUrl: disposition === "inline" ? url : undefined,
+    downloadUrl: disposition === "attachment" ? url : undefined,
+    expiresIn,
+    documentId: document.id,
+    documentName: document.name || null,
+    mimeType: version.mimeType || null,
+    fileSizeBytes: version.fileSizeBytes ?? null,
+    versionId: version.id,
+    versionNumber: version.versionNumber,
+  };
+};
+
 const downloadDocument = async (
   caseId,
   documentId,
@@ -787,26 +831,61 @@ const downloadDocument = async (
   versionId = null,
 ) => {
   const document = await getAuthorizedDocument(caseId, documentId, currentUser);
-  let version = document.currentVersion;
-  if (versionId) {
-    version = await documentRepository.findVersionById(documentId, versionId);
-  }
-  if (!version) throw new ApiError(404, "Document version not found.");
-  const expiresIn = 300;
-  const downloadUrl = await getSignedDownloadUrl(version.fileKey, expiresIn);
-  await prisma.documentAccessLog.create({
-    data: {
-      documentId,
-      accessedByUserId: currentUser.id,
-      action: "DOWNLOADED",
-    },
+  const version = await resolveDocumentVersion(document, documentId, versionId);
+  const result = await buildDocumentAccessUrl({
+    document,
+    version,
+    disposition: "attachment",
+    action: "DOWNLOADED",
+    currentUser,
   });
   return {
-    downloadUrl,
-    expiresIn,
-    versionId: version.id,
-    versionNumber: version.versionNumber,
+    downloadUrl: result.downloadUrl,
+    expiresIn: result.expiresIn,
+    documentId: result.documentId,
+    documentName: result.documentName,
+    mimeType: result.mimeType,
+    fileSizeBytes: result.fileSizeBytes,
+    versionId: result.versionId,
+    versionNumber: result.versionNumber,
   };
+};
+
+/** Inline signed URL for in-app / browser preview (logs VIEWED). */
+const viewDocument = async (
+  caseId,
+  documentId,
+  currentUser,
+  versionId = null,
+) => {
+  const document = await getAuthorizedDocument(caseId, documentId, currentUser);
+  const version = await resolveDocumentVersion(document, documentId, versionId);
+  const result = await buildDocumentAccessUrl({
+    document,
+    version,
+    disposition: "inline",
+    action: "VIEWED",
+    currentUser,
+  });
+  return {
+    viewUrl: result.viewUrl,
+    expiresIn: result.expiresIn,
+    documentId: result.documentId,
+    documentName: result.documentName,
+    mimeType: result.mimeType,
+    fileSizeBytes: result.fileSizeBytes,
+    versionId: result.versionId,
+    versionNumber: result.versionNumber,
+  };
+};
+
+const viewDocumentFromHub = async (
+  documentId,
+  currentUser,
+  versionId = null,
+) => {
+  const document = await getDocumentFromHub(documentId, currentUser);
+  return viewDocument(document.caseId, documentId, currentUser, versionId);
 };
 
 const getDocumentAccessLogs = async (
@@ -828,13 +907,21 @@ const getDocumentAccessLogs = async (
     limit,
     {
       action: query.action,
+      role: query.role,
       dateFrom: query.dateFrom,
       dateTo: query.dateTo,
     },
   );
+  const matterName = document.case?.title ?? null;
   return {
+    matterName,
+    caseTitle: matterName,
+    caseNumber: document.case?.caseNumber ?? null,
+    documentId: document.id,
+    documentName: document.name ?? null,
     accessLogs: accessLogs.map((log) => ({
       ...log,
+      matterName,
       role: log.accessedBy?.role?.name ?? null,
       accessedByName: log.accessedBy
         ? [log.accessedBy.firstName, log.accessedBy.lastName]
@@ -859,5 +946,7 @@ module.exports = {
   softDeleteDocument,
   getDocumentVersions,
   downloadDocument,
+  viewDocument,
+  viewDocumentFromHub,
   getDocumentAccessLogs,
 };

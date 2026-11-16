@@ -56,7 +56,11 @@ const PERMISSIONS = {
       PermissionAction.INVITE,
       PermissionAction.REVOKE,
     ],
-    [PermissionModule.TIMESHEETS]: [PermissionAction.VIEW],
+    [PermissionModule.TIMESHEETS]: [
+      PermissionAction.VIEW,
+      PermissionAction.CREATE,
+      PermissionAction.EDIT,
+    ],
     [PermissionModule.BILLING]: [
       PermissionAction.VIEW,
       PermissionAction.CREATE,

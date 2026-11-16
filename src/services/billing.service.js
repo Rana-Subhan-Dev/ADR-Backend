@@ -11,6 +11,8 @@ const { PRE_POST_ACTIVITY_TYPES } = require("../constants/billing.constants");
 const {
   InvoiceStatus,
   InvoiceReviewStatus,
+  InvoiceAudience,
+  InvoiceType,
   PaymentStatus,
   TimesheetApprovalStatus,
   IntegrationType,
@@ -760,7 +762,8 @@ const buildCanonicalInvoice = (
     ...invoice,
     batchId: invoice.invoiceBatchId || null,
     issuedAt: invoice.finalizedAt || null,
-    matterName: invoice.case?.title || null,
+    matterName:
+      invoice.case?.inquiry?.matterName || invoice.case?.title || null,
     caseManager:
       caseManagers.map(userDisplayName).filter(Boolean).join(", ") || null,
     neutral: neutrals.map(userDisplayName).filter(Boolean).join(", ") || null,
@@ -4124,83 +4127,605 @@ const retryQuickBooksSync = async (data, currentUser) => {
   );
 };
 
-const generateNeutralPaymentStatement = async (caseId, data, currentUser) => {
-  await assertCanMutateCaseBilling(caseId, currentUser);
-  await caseService.getCaseById(caseId, currentUser);
+const NEUTRAL_STATEMENT_TYPES = Object.freeze([
+  "FIRM_INVOICE_PAYMENT",
+  "PLATFORM_TIMESHEET_PAYMENT",
+  "FINAL_PAYMENT",
+]);
 
-  const billingConfig =
-    await billingRepository.findBillingConfigByCaseId(caseId);
-  const timesheets = await billingRepository.findTimesheetsByIds(
-    data.timesheetIds,
-  );
-  if (timesheets.length !== data.timesheetIds.length) {
-    throw new ApiError(400, "One or more selected timesheets do not exist.");
+const formatUsdLabel = (amount) =>
+  new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+  }).format(Number(amount) || 0);
+
+const toIsoDateOnly = (value) => {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+};
+
+const formatMmDdYyyy = (value) => {
+  const iso = toIsoDateOnly(value);
+  if (!iso) return null;
+  const [year, month, day] = iso.split("-");
+  return `${month}/${day}/${year}`;
+};
+
+const titleCaseEnum = (value) => {
+  if (!value) return null;
+  return String(value)
+    .toLowerCase()
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+};
+
+const parseTimesheetIdsQuery = (raw) => {
+  if (raw == null || raw === "") return [];
+  if (Array.isArray(raw)) return raw.filter(Boolean);
+  return String(raw)
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+};
+
+const amountsWithinTolerance = (expected, actual, tolerance = 0.01) =>
+  Math.abs(Number(expected) - Number(actual)) <= tolerance;
+
+const defaultStatementTypeFromConfig = (billingConfig) =>
+  billingConfig?.billingInputSource === BillingInputSource.FIRM_INVOICE
+    ? "FIRM_INVOICE_PAYMENT"
+    : "PLATFORM_TIMESHEET_PAYMENT";
+
+const resolveStatementType = (requested, billingConfig) => {
+  if (requested && NEUTRAL_STATEMENT_TYPES.includes(requested)) {
+    return requested;
   }
-  for (const ts of timesheets) {
-    if (ts.caseId !== caseId) {
-      throw new ApiError(
-        400,
-        "All timesheets must belong to the selected case.",
-      );
+  return defaultStatementTypeFromConfig(billingConfig);
+};
+
+const getCaseNeutralContext = async (caseId, currentUser) => {
+  const caseRecord = await caseService.getCaseById(caseId, currentUser);
+  return {
+    caseRecord,
+    matterName:
+      caseRecord.matterName ||
+      caseRecord.inquiry?.matterName ||
+      caseRecord.title ||
+      null,
+    caseType: titleCaseEnum(caseRecord.caseType || caseRecord.type),
+    neutralName:
+      caseRecord.assignedNeutral ||
+      userDisplayName(caseRecord.assignedNeutralUser) ||
+      null,
+  };
+};
+
+const findFirmSourceInvoice = async (caseId, invoiceId) => {
+  if (invoiceId) {
+    const invoice = await billingRepository.findInvoiceById(invoiceId);
+    if (!invoice || invoice.caseId !== caseId) {
+      throw new ApiError(404, "Source invoice not found for this case.");
     }
+    return invoice;
   }
 
+  return prisma.invoice.findFirst({
+    where: {
+      caseId,
+      invoiceStatus: { not: InvoiceStatus.VOID },
+      firmInvoiceAmount: { not: null, gt: 0 },
+    },
+    orderBy: [{ firmInvoiceDate: "desc" }, { createdAt: "desc" }],
+    include: {
+      case: {
+        select: {
+          id: true,
+          title: true,
+          caseNumber: true,
+          caseType: true,
+          inquiry: { select: { matterName: true } },
+        },
+      },
+    },
+  });
+};
+
+const findEligibleTimesheetsForStatement = async (caseId, timesheetIds = []) => {
+  if (timesheetIds.length > 0) {
+    const timesheets = await billingRepository.findTimesheetsByIds(timesheetIds);
+    if (timesheets.length !== timesheetIds.length) {
+      throw new ApiError(400, "One or more selected timesheets do not exist.");
+    }
+    for (const ts of timesheets) {
+      if (ts.caseId !== caseId) {
+        throw new ApiError(
+          400,
+          "All timesheets must belong to the selected case.",
+        );
+      }
+      if (ts.approvalStatus !== TimesheetApprovalStatus.APPROVED) {
+        throw new ApiError(400, "Only approved timesheets can be paid.");
+      }
+    }
+    return timesheets;
+  }
+
+  return prisma.neutralTimesheet.findMany({
+    where: {
+      caseId,
+      approvalStatus: TimesheetApprovalStatus.APPROVED,
+      lineItems: {
+        none: {
+          invoice: {
+            invoiceStatus: { not: InvoiceStatus.VOID },
+          },
+        },
+      },
+    },
+    include: {
+      neutral: true,
+      expenses: {
+        select: {
+          id: true,
+          expenseType: true,
+          expenseDate: true,
+          amount: true,
+          description: true,
+        },
+      },
+    },
+    orderBy: [{ entryDate: "asc" }, { createdAt: "asc" }],
+  });
+};
+
+const computeTimesheetServicesAndExpenses = (timesheets, billingConfig) => {
   const trackedHoursByBucket = { prePost: 0 };
   let totalServicesAmount = 0;
   let totalExpensesAmount = 0;
+  let servicesThroughDate = null;
+  const timesheetLines = [];
 
-  const items = timesheets
+  const sorted = timesheets
     .slice()
-    .sort((a, b) => new Date(a.entryDate) - new Date(b.entryDate))
-    .map((ts) => {
-      const hours = Number(ts.hours);
-      const rate = resolveTimesheetRate(
-        ts.activityType,
-        billingConfig,
-        trackedHoursByBucket,
-      );
-      if (PRE_POST_ACTIVITY_TYPES.has(ts.activityType)) {
-        trackedHoursByBucket.prePost += hours;
-      }
-      const amount = roundMoney(hours * rate);
-      totalServicesAmount += amount;
-      return {
-        timesheetId: ts.id,
-        date: ts.entryDate,
-        activityType: ts.activityType,
-        hours: roundMoney(hours),
-        hourlyRate: rate,
-        totalAmount: amount,
-      };
+    .sort((a, b) => new Date(a.entryDate) - new Date(b.entryDate));
+
+  for (const ts of sorted) {
+    const hours = Number(ts.hours) || 0;
+    const rate = resolveTimesheetRate(
+      ts.activityType,
+      billingConfig,
+      trackedHoursByBucket,
+    );
+    if (PRE_POST_ACTIVITY_TYPES.has(ts.activityType)) {
+      trackedHoursByBucket.prePost += hours;
+    }
+    const amount = roundMoney(hours * rate);
+    totalServicesAmount += amount;
+    const entryIso = toIsoDateOnly(ts.entryDate);
+    if (
+      entryIso &&
+      (!servicesThroughDate || entryIso > servicesThroughDate)
+    ) {
+      servicesThroughDate = entryIso;
+    }
+    timesheetLines.push({
+      timesheetId: ts.id,
+      description: titleCaseEnum(ts.activityType) || "Neutral services",
+      secondaryDescription: entryIso,
+      quantity: roundMoney(hours),
+      unitPrice: rate,
+      amount,
+      serviceDate: ts.entryDate ? new Date(ts.entryDate) : null,
+      relatedTimesheetId: ts.id,
     });
 
-  const agreementFeeDefault = billingConfig?.agreementFeePercentage
+    for (const expense of ts.expenses || []) {
+      totalExpensesAmount += Number(expense.amount) || 0;
+    }
+  }
+
+  return {
+    totalServicesAmount: roundMoney(totalServicesAmount),
+    totalExpensesAmount: roundMoney(totalExpensesAmount),
+    servicesThroughDate,
+    timesheetLines,
+  };
+};
+
+const buildNeutralStatementLineItems = ({
+  servicesAmount,
+  expensesAmount,
+  feePercent,
+  servicesThroughDate,
+  neutralName,
+  calculationSourceLabel,
+}) => {
+  const feeAmount = roundMoney((servicesAmount * feePercent) / 100);
+  const throughLabel = formatMmDdYyyy(servicesThroughDate) || "—";
+  const lineItems = [
+    {
+      code: "NEUTRAL_SERVICES",
+      title: `Neutral Services Through ${throughLabel}`,
+      detail: neutralName || "Neutral",
+      calculationLabel: calculationSourceLabel,
+      amount: roundMoney(servicesAmount),
+    },
+    {
+      code: "FEDARB_FEE",
+      title: `FedArb Agreement Fee (${feePercent}%)`,
+      detail:
+        "Deducted from neutral fees (per case billing configuration).",
+      calculationLabel: `${formatUsdLabel(servicesAmount)} x`,
+      amount: roundMoney(-feeAmount),
+    },
+  ];
+
+  if (expensesAmount > 0) {
+    lineItems.push({
+      code: "EXPENSES",
+      title: "Expenses",
+      detail: "Reimbursable expenses (no fee on expenses).",
+      calculationLabel: calculationSourceLabel,
+      amount: roundMoney(expensesAmount),
+    });
+  }
+
+  const totalPaymentToNeutral = roundMoney(
+    servicesAmount - feeAmount + expensesAmount,
+  );
+
+  return { lineItems, feeAmount, totalPaymentToNeutral };
+};
+
+const buildNeutralPaymentStatementPreview = async (
+  caseId,
+  query,
+  currentUser,
+) => {
+  await caseService.getCaseById(caseId, currentUser);
+  const billingConfig =
+    await billingRepository.findBillingConfigByCaseId(caseId);
+  const { matterName, caseType, neutralName } = await getCaseNeutralContext(
+    caseId,
+    currentUser,
+  );
+
+  const statementType = resolveStatementType(
+    query.statementType,
+    billingConfig,
+  );
+  const feePercent = billingConfig?.agreementFeePercentage
     ? Number(billingConfig.agreementFeePercentage)
-    : 15.0;
-  const adminFeePercentage = Number(
-    data.adminFeePercentage ?? agreementFeeDefault,
-  );
-  const adminFeeDeduction = roundMoney(
-    (totalServicesAmount * adminFeePercentage) / 100,
-  );
-  const netPayable = roundMoney(
-    totalServicesAmount - adminFeeDeduction + totalExpensesAmount,
-  );
+    : 15;
+  const statementDate = toIsoDateOnly(new Date());
+  const timesheetIds = parseTimesheetIdsQuery(query.timesheetIds);
+
+  let invoiceId = null;
+  let invoiceNumber = null;
+  let servicesAmount = 0;
+  let expensesAmount = 0;
+  let servicesThroughDate = null;
+  let calculationSourceLabel = "From submitted invoice";
+  let timesheetLines = [];
+
+  const useFirmPath =
+    statementType === "FIRM_INVOICE_PAYMENT" ||
+    (statementType === "FINAL_PAYMENT" &&
+      billingConfig?.billingInputSource === BillingInputSource.FIRM_INVOICE);
+
+  if (useFirmPath) {
+    const sourceInvoice = await findFirmSourceInvoice(caseId, query.invoiceId);
+    if (!sourceInvoice) {
+      throw new ApiError(
+        400,
+        "No firm invoice source found for this case. Provide invoiceId or record firm invoice amounts first.",
+      );
+    }
+    invoiceId = sourceInvoice.id;
+    invoiceNumber = sourceInvoice.invoiceNumber;
+    servicesAmount = Number(sourceInvoice.firmInvoiceAmount || 0);
+    expensesAmount = Number(sourceInvoice.firmExpensesAmount || 0);
+    servicesThroughDate =
+      toIsoDateOnly(sourceInvoice.firmInvoiceDate) ||
+      toIsoDateOnly(sourceInvoice.billingPeriodEnd) ||
+      toIsoDateOnly(sourceInvoice.invoiceDate);
+    calculationSourceLabel = "From submitted invoice";
+  } else {
+    const timesheets = await findEligibleTimesheetsForStatement(
+      caseId,
+      timesheetIds,
+    );
+    if (!timesheets.length) {
+      throw new ApiError(
+        400,
+        "No approved uninvoiced timesheets found for this payment statement.",
+      );
+    }
+    const computed = computeTimesheetServicesAndExpenses(
+      timesheets,
+      billingConfig,
+    );
+    servicesAmount = computed.totalServicesAmount;
+    expensesAmount = computed.totalExpensesAmount;
+    servicesThroughDate = computed.servicesThroughDate;
+    timesheetLines = computed.timesheetLines;
+    calculationSourceLabel = "From approved platform timesheets";
+    invoiceNumber = null;
+    invoiceId = null;
+  }
+
+  const { lineItems, totalPaymentToNeutral } = buildNeutralStatementLineItems({
+    servicesAmount,
+    expensesAmount,
+    feePercent,
+    servicesThroughDate,
+    neutralName,
+    calculationSourceLabel,
+  });
 
   return {
     caseId,
-    statementDate: data.statementDate || new Date().toISOString(),
-    neutralParticipantId: data.neutralParticipantId || null,
-    totalServicesAmount: roundMoney(totalServicesAmount),
-    adminFeePercentage,
-    agreementFeePercentage: billingConfig?.agreementFeePercentage
-      ? Number(billingConfig.agreementFeePercentage)
-      : null,
-    adminFeeDeduction,
-    totalExpensesAmount: roundMoney(totalExpensesAmount),
-    netPayable,
-    items,
-    notes: data.notes || null,
+    caseType,
+    neutralName,
+    matterName,
+    invoiceNumber,
+    invoiceId,
+    statementDate,
+    servicesThroughDate,
+    feePercent,
+    currency: "USD",
+    statementType,
+    lineItems,
+    totalPaymentToNeutral,
+    allowedStatementTypes: [...NEUTRAL_STATEMENT_TYPES],
+    _internal: {
+      sourceMode: useFirmPath ? "FIRM" : "TIMESHEET",
+      timesheetLines,
+      timesheetIds: timesheetLines.map((row) => row.timesheetId),
+      servicesAmount,
+      expensesAmount,
+    },
+  };
+};
+
+const previewNeutralPaymentStatement = async (caseId, query, currentUser) => {
+  if (!isAuthorizedForBilling(currentUser)) {
+    throw new ApiError(
+      403,
+      "You do not have permission to preview neutral payment statements.",
+    );
+  }
+  const preview = await buildNeutralPaymentStatementPreview(
+    caseId,
+    query,
+    currentUser,
+  );
+  const { _internal, ...publicPreview } = preview;
+  void _internal;
+  return publicPreview;
+};
+
+const generateNeutralPaymentStatement = async (caseId, data, currentUser) => {
+  await assertCanMutateCaseBilling(caseId, currentUser);
+
+  const preview = await buildNeutralPaymentStatementPreview(
+    caseId,
+    {
+      statementType: data.statementType,
+      invoiceId: data.invoiceId || undefined,
+      timesheetIds: data.timesheetIds || [],
+    },
+    currentUser,
+  );
+
+  const feePercent = preview.feePercent;
+  if (
+    data.feePercent != null &&
+    !amountsWithinTolerance(feePercent, data.feePercent)
+  ) {
+    throw new ApiError(
+      400,
+      `feePercent does not match case billing configuration (${feePercent}).`,
+    );
+  }
+
+  if (
+    data.totalPaymentToNeutral != null &&
+    !amountsWithinTolerance(
+      preview.totalPaymentToNeutral,
+      data.totalPaymentToNeutral,
+    )
+  ) {
+    throw new ApiError(
+      400,
+      "totalPaymentToNeutral does not match server-calculated total.",
+    );
+  }
+
+  if (Array.isArray(data.lineItems) && data.lineItems.length > 0) {
+    for (const echoed of data.lineItems) {
+      const expected = preview.lineItems.find((row) => row.code === echoed.code);
+      if (!expected) {
+        throw new ApiError(400, `Unexpected line item code: ${echoed.code}`);
+      }
+      if (!amountsWithinTolerance(expected.amount, echoed.amount)) {
+        throw new ApiError(
+          400,
+          `Line item ${echoed.code} amount does not match server calculation.`,
+        );
+      }
+    }
+  }
+
+  const statementDate = data.statementDate
+    ? new Date(data.statementDate)
+    : new Date();
+  const servicesThroughDate = data.servicesThroughDate
+    ? new Date(data.servicesThroughDate)
+    : preview.servicesThroughDate
+      ? new Date(preview.servicesThroughDate)
+      : null;
+  const invoiceType =
+    data.statementType === "FINAL_PAYMENT"
+      ? InvoiceType.FINAL
+      : InvoiceType.PROGRESS;
+
+  const persistLines = [];
+  if (preview._internal.timesheetLines.length > 0) {
+    for (const row of preview._internal.timesheetLines) {
+      persistLines.push({
+        description: row.description,
+        secondaryDescription: row.secondaryDescription,
+        quantity: row.quantity,
+        unitPrice: row.unitPrice,
+        amount: row.amount,
+        serviceDate: row.serviceDate,
+        referenceCode: "NEUTRAL_SERVICES",
+        sourceLabel: "Platform Timesheet",
+        relatedTimesheetId: row.relatedTimesheetId,
+      });
+    }
+  } else {
+    const servicesLine = preview.lineItems.find(
+      (row) => row.code === "NEUTRAL_SERVICES",
+    );
+    if (servicesLine) {
+      persistLines.push({
+        description: servicesLine.title,
+        secondaryDescription: servicesLine.detail,
+        quantity: 1,
+        unitPrice: servicesLine.amount,
+        amount: servicesLine.amount,
+        serviceDate: servicesThroughDate,
+        referenceCode: "NEUTRAL_SERVICES",
+        sourceLabel: "Firm Invoice",
+        relatedTimesheetId: null,
+      });
+    }
+  }
+
+  for (const row of preview.lineItems) {
+    if (row.code === "NEUTRAL_SERVICES") continue;
+    persistLines.push({
+      description: row.title,
+      secondaryDescription: row.detail,
+      quantity: 1,
+      unitPrice: row.amount,
+      amount: row.amount,
+      serviceDate: servicesThroughDate,
+      referenceCode: row.code,
+      sourceLabel:
+        row.code === "FEDARB_FEE" ? "Agreement Fee" : "Expenses",
+      relatedTimesheetId: null,
+    });
+  }
+
+  const subtotal = preview.totalPaymentToNeutral;
+  const relatedTimesheetIds = preview._internal.timesheetIds;
+
+  const created = await runSerializableWithRetry(
+    async (tx) => {
+      if (relatedTimesheetIds.length > 0) {
+        await validateRelatedTimesheets(caseId, relatedTimesheetIds, {
+          db: tx,
+        });
+      }
+
+      const invoiceNumber = await generateInvoiceNumber(tx);
+      const invoice = await tx.invoice.create({
+        data: {
+          caseId,
+          invoiceNumber,
+          invoiceType,
+          invoiceStatus: InvoiceStatus.DRAFT,
+          paymentStatus: PaymentStatus.UNPAID,
+          reviewStatus: InvoiceReviewStatus.PENDING_REVIEW,
+          audience: InvoiceAudience.NEUTRAL,
+          currency: "USD",
+          invoiceDate: statementDate,
+          billingInputSource:
+            preview._internal.sourceMode === "FIRM"
+              ? BillingInputSource.FIRM_INVOICE
+              : BillingInputSource.PLATFORM_TIMESHEETS,
+          billingPeriodEnd: servicesThroughDate,
+          firmInvoiceNumber:
+            preview._internal.sourceMode === "FIRM"
+              ? preview.invoiceNumber
+              : null,
+          firmInvoiceDate:
+            preview._internal.sourceMode === "FIRM"
+              ? servicesThroughDate
+              : null,
+          firmInvoiceAmount:
+            preview._internal.sourceMode === "FIRM"
+              ? preview._internal.servicesAmount
+              : null,
+          firmExpensesAmount:
+            preview._internal.sourceMode === "FIRM"
+              ? preview._internal.expensesAmount
+              : null,
+          subtotal,
+          taxRate: 0,
+          taxAmount: 0,
+          amountDue: subtotal,
+          dueDate: null,
+          specialInstructions: emptyToNull(data.notes),
+          reviewNotes: emptyToNull(data.notes),
+          submittedForReviewAt: new Date(),
+          submittedForReviewByUserId: currentUser.id,
+          lineItems: {
+            create: persistLines,
+          },
+        },
+        select: { id: true },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actingUserId: currentUser.id,
+          actingUserRoleSnapshot: currentUser.role?.name || null,
+          action: "SUBMIT_NEUTRAL_PAYMENT_STATEMENT",
+          module: "BILLING",
+          affectedRecordType: "Invoice",
+          affectedRecordId: invoice.id,
+          newValue: {
+            statementType: data.statementType,
+            totalPaymentToNeutral: subtotal,
+            feePercent,
+            sourceInvoiceId: preview.invoiceId,
+            timesheetIds: relatedTimesheetIds,
+            notes: data.notes || null,
+          },
+        },
+      });
+
+      await tx.caseTimelineEvent.create({
+        data: {
+          caseId,
+          eventType: CaseTimelineEventType.STATUS_CHANGED,
+          relatedRecordType: "Invoice",
+          relatedRecordId: invoice.id,
+          summary: `Neutral payment statement ${invoiceNumber} submitted for Peer/Controller Review`,
+          actorUserId: currentUser.id,
+        },
+      });
+
+      return billingRepository.findInvoiceById(invoice.id, tx);
+    },
+    {},
+    { alsoRetryInvoiceNumberConflict: true },
+  );
+
+  const canonical = buildCanonicalInvoice(created, currentUser);
+  return {
+    ...canonical,
+    statementType: data.statementType,
+    totalPaymentToNeutral: subtotal,
+    feePercent,
+    lineItemsPreview: preview.lineItems,
   };
 };
 
@@ -4231,6 +4756,7 @@ module.exports = {
   sendInvoicePaymentReminder,
   getQuickBooksSyncLogs,
   retryQuickBooksSync,
+  previewNeutralPaymentStatement,
   generateNeutralPaymentStatement,
   // Shared read helpers for accounting / other portals
   computeInvoiceBalances,

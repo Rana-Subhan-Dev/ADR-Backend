@@ -159,11 +159,11 @@ const reopenCaseSchema = Joi.object({
 });
 
 const messageAllPartiesSchema = Joi.object({
+  // Empty / omitted → server defaults to active CASE_MANAGER participants
   recipientParticipantIds: Joi.array()
     .items(Joi.string().uuid())
     .unique()
-    .min(1)
-    .required(),
+    .default([]),
   // FE Neutral portal sends `body`; `message` kept as alias
   body: Joi.string().trim().min(1).max(10000).optional(),
   message: Joi.string().trim().min(1).max(10000).optional(),

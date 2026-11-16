@@ -24,6 +24,7 @@ const docusignRoutes = require("./docusign.routes");
 const billingRoutes = require("./billing.routes");
 const adminRoutes = require("./admin.routes");
 const accountingRoutes = require("./accounting.routes");
+const conflictsCheckRoutes = require("./conflictsCheck.routes");
 const express = require("express");
 const router = express.Router();
 
@@ -103,6 +104,10 @@ const defaultRoutes = [
   {
     path: "/reports",
     route: reportRoutes,
+  },
+  {
+    path: "/conflicts-checks",
+    route: conflictsCheckRoutes,
   },
   {
     path: "/cases/:caseId/hearings",

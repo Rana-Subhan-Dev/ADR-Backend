@@ -220,6 +220,54 @@ const downloadDocumentVersion = asyncHandler(async (req, res) =>
     ),
 );
 
+const viewDocument = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await documentService.viewDocument(
+          req.params.caseId,
+          req.params.documentId,
+          req.user,
+        ),
+        "Document view URL generated successfully.",
+      ),
+    ),
+);
+
+const viewDocumentVersion = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await documentService.viewDocument(
+          req.params.caseId,
+          req.params.documentId,
+          req.user,
+          req.params.versionId,
+        ),
+        "Document version view URL generated successfully.",
+      ),
+    ),
+);
+
+const viewDocumentFromHub = asyncHandler(async (req, res) =>
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        await documentService.viewDocumentFromHub(
+          req.params.documentId,
+          req.user,
+        ),
+        "Document view URL generated successfully.",
+      ),
+    ),
+);
+
 const getDocumentAccessLogs = asyncHandler(async (req, res) =>
   res
     .status(200)
@@ -250,5 +298,8 @@ module.exports = {
   getDocumentVersions,
   downloadDocument,
   downloadDocumentVersion,
+  viewDocument,
+  viewDocumentVersion,
+  viewDocumentFromHub,
   getDocumentAccessLogs,
 };

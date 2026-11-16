@@ -32,4 +32,11 @@ router.get(
   documentController.getDocumentFromHub,
 );
 
+router.get(
+  "/:documentId/view",
+  requirePermission(PermissionModule.DOCUMENTS, PermissionAction.VIEW),
+  validate(hubDocumentIdSchema, "params"),
+  documentController.viewDocumentFromHub,
+);
+
 module.exports = router;

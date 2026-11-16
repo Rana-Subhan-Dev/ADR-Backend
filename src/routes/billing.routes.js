@@ -232,6 +232,14 @@ router.post(
   controller.retryQuickBooksSync,
 );
 
+router.get(
+  "/cases/:caseId/neutral-payment-statement/preview",
+  requirePermission(PermissionModule.BILLING, PermissionAction.VIEW),
+  validate(validation.caseIdParamSchema, "params"),
+  validate(validation.neutralPaymentStatementPreviewSchema, "query"),
+  controller.previewNeutralPaymentStatement,
+);
+
 router.post(
   "/cases/:caseId/neutral-payment-statement",
   requirePermission(PermissionModule.BILLING, PermissionAction.CREATE),

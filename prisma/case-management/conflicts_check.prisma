@@ -1,0 +1,64 @@
+model ConflictsCheck {
+  id String @id @default(uuid())
+
+  neutralUserId String
+  neutralUser   User   @relation("ConflictsCheckNeutral", fields: [neutralUserId], references: [id], onDelete: Restrict)
+
+  matterName   String?
+  searchWindow ConflictsSearchWindow @default(LAST_5_YEARS)
+
+  parties            Json @default("[]")
+  counsel            Json @default("[]")
+  lawFirms           Json @default("[]")
+  otherParticipants  Json @default("[]")
+
+  status       ConflictsCheckStatus @default(CLEAR)
+  title        String
+  resultLabel  String
+  windowLabel  String
+
+  namesSearched   Int @default(0)
+  mattersSearched Int @default(0)
+  mattersTotal    Int @default(0)
+  olderMatchCount Int @default(0)
+
+  runAt       DateTime @default(now()) @db.Timestamp(3)
+  runByUserId String
+  runByUser   User   @relation("ConflictsCheckRunBy", fields: [runByUserId], references: [id], onDelete: Restrict)
+
+  matches ConflictsCheckMatch[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  @@index([neutralUserId, runAt])
+  @@index([runAt])
+  @@map("conflicts_checks")
+}
+
+model ConflictsCheckMatch {
+  id String @id @default(uuid())
+
+  checkId String
+  check   ConflictsCheck @relation(fields: [checkId], references: [id], onDelete: Cascade)
+
+  caseId               String?
+  case                 Case?   @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  matterName           String?
+  matchedParty         String?
+  matchedHistoricalCase String?
+  matchType            String?
+  matchSource          String?
+  severity             String?
+  notes                String? @db.Text
+  checkedAt            DateTime @default(now()) @db.Timestamp(3)
+
+  historicalDocumentId   String?
+  historicalDocumentName String?
+
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([checkId])
+  @@index([caseId])
+  @@map("conflicts_check_matches")
+}

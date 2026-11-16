@@ -48,6 +48,36 @@ const assertNeutral = async (caseId, userId, tx = prisma) => {
     throw new ApiError(400, "Neutral must be an active case participant.");
 };
 
+const resolveNeutralUserIdForCreate = async (caseId, data, currentUser) => {
+  if (!canAccessFinance(currentUser)) {
+    return currentUser.id;
+  }
+  if (data.neutralUserId) {
+    return data.neutralUserId;
+  }
+  const participant = await prisma.caseParticipant.findFirst({
+    where: { caseId, role: "NEUTRAL", accessStatus: "ACTIVE" },
+    orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
+    select: { userId: true },
+  });
+  if (!participant) {
+    throw new ApiError(400, "No active neutral is assigned to this case.");
+  }
+  return participant.userId;
+};
+
+const assertCanActOnTimesheet = (timesheet, currentUser, actionLabel) => {
+  if (
+    !canAccessFinance(currentUser) &&
+    timesheet.neutralUserId !== currentUser.id
+  ) {
+    throw new ApiError(
+      403,
+      `Only the assigned neutral or case managers can ${actionLabel} this timesheet entry.`,
+    );
+  }
+};
+
 const assertHearing = async (caseId, hearingId, tx = prisma) => {
   if (!hearingId) return;
   const hearing = await tx.hearing.findFirst({
@@ -246,10 +276,11 @@ const assertDraftEditable = (timesheet, currentUser) => {
 
 const createTimesheet = async (caseId, data, currentUser) => {
   await caseService.getCaseById(caseId, currentUser);
-  const neutralUserId =
-    canAccessFinance(currentUser) && data.neutralUserId
-      ? data.neutralUserId
-      : currentUser.id;
+  const neutralUserId = await resolveNeutralUserIdForCreate(
+    caseId,
+    data,
+    currentUser,
+  );
   await assertNeutral(caseId, neutralUserId);
   await assertHearing(caseId, data.hearingId);
   await assertExpensesAllowed(caseId, data.expenses);
@@ -613,6 +644,7 @@ const updateTimesheet = async (caseId, timesheetId, data, currentUser) => {
 
 const deleteTimesheet = async (caseId, timesheetId, currentUser) => {
   const timesheet = await getTimesheet(caseId, timesheetId, currentUser);
+  assertCanActOnTimesheet(timesheet, currentUser, "delete");
   if (timesheet.status !== "DRAFT")
     throw new ApiError(400, "Only draft timesheet entries can be deleted.");
   return runTransaction(async (tx) => {
@@ -635,11 +667,7 @@ const deleteTimesheet = async (caseId, timesheetId, currentUser) => {
 
 const submitTimesheet = async (caseId, timesheetId, currentUser) => {
   const timesheet = await getTimesheet(caseId, timesheetId, currentUser);
-  if (timesheet.neutralUserId !== currentUser.id)
-    throw new ApiError(
-      403,
-      "Only the assigned neutral can submit this timesheet entry.",
-    );
+  assertCanActOnTimesheet(timesheet, currentUser, "submit");
   if (timesheet.status !== "DRAFT")
     throw new ApiError(400, "Only draft timesheet entries can be submitted.");
 

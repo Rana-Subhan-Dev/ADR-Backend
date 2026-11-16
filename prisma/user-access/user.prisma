@@ -87,6 +87,8 @@ model User {
   invoicesReviewed           Invoice[]                   @relation("InvoiceReviewedBy")
   importedMigrationBatches   MigrationBatch[]
   zoomAlternateHostHearings  Hearing[]                   @relation("HearingZoomAlternateHost")
+  conflictsChecksAsNeutral   ConflictsCheck[]            @relation("ConflictsCheckNeutral")
+  conflictsChecksRun         ConflictsCheck[]            @relation("ConflictsCheckRunBy")
 
   createdAt DateTime @default(now()) @db.Timestamp(3)
   updatedAt DateTime @updatedAt @db.Timestamp(3)

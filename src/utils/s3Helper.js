@@ -71,11 +71,32 @@ const uploadToS3 = multer({
   },
 });
 
-const getSignedDownloadUrl = async (key, expiresInSeconds = 300) => {
-  const command = new GetObjectCommand({
+const sanitizeContentDispositionFileName = (fileName) => {
+  const raw = String(fileName || "document").trim() || "document";
+  return raw.replace(/["\r\n]/g, "_");
+};
+
+/**
+ * @param {string} key
+ * @param {number} [expiresInSeconds=300]
+ * @param {{ disposition?: 'inline'|'attachment', fileName?: string, contentType?: string }} [options]
+ */
+const getSignedDownloadUrl = async (
+  key,
+  expiresInSeconds = 300,
+  options = {},
+) => {
+  const disposition = options.disposition || "attachment";
+  const fileName = sanitizeContentDispositionFileName(options.fileName);
+  const commandInput = {
     Bucket: getBucketName(),
     Key: key,
-  });
+    ResponseContentDisposition: `${disposition}; filename="${fileName}"`,
+  };
+  if (options.contentType) {
+    commandInput.ResponseContentType = options.contentType;
+  }
+  const command = new GetObjectCommand(commandInput);
   return getSignedUrl(s3, command, { expiresIn: expiresInSeconds });
 };
 
