@@ -117,7 +117,7 @@ app.get("/docusign-embed-test", (req, res) => {
 
 app.use(helmet());
 
-const allowedOrigins = ["http://localhost:3000"];
+const allowedOrigins = ["http://localhost:3000", "http://13.223.196.218:3000"];
 
 const corsOptions = {
   origin: function (origin, callback) {
