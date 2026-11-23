@@ -12,6 +12,7 @@
     "prisma:studio": "prisma studio",
     "prisma:seed": "node prisma/seed.js",
     "prisma:seed:admin": "node prisma/seed-admin.js",
+    "prisma:seed:salesforce": "node prisma/seed-salesforce.js",
     "postinstall": "npx puppeteer browsers install chrome"
   },
   "keywords": [],
@@ -29,6 +30,7 @@
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
+    "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.0",
     "hellosign-embedded": "^2.12.4",
